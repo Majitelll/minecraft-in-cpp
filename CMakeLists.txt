@@ -6,14 +6,14 @@ endif()
 
 project(GLFWWindowExample VERSION 1.0)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
 
 set(GLFW_BUILD_WAYLAND OFF CACHE BOOL "Disable Wayland backend in GLFW")
 set(GLFW_BUILD_X11 ON CACHE BOOL "Enable X11 backend in GLFW")
 
 add_subdirectory(vendors/glfw)
-add_subdirectory(vendors/cglm)  # <-- Add this line to include cglm
+add_subdirectory(vendors/cglm) 
 
 find_package(OpenGL REQUIRED)
 
@@ -25,5 +25,5 @@ add_executable(GLFWWindowExample
 target_include_directories(GLFWWindowExample PRIVATE include)
 
 target_link_libraries(GLFWWindowExample
-    PRIVATE glfw OpenGL::GL cglm  # <-- Link with cglm target
+    PRIVATE glfw OpenGL::GL cglm
 )
