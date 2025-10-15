@@ -1,0 +1,88 @@
+name: CMake Build and Release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      # Step 1: Checkout repository with submodules
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive  # initialize submodules automatically
+
+      # Step 2: Install dependencies (CMake, build tools, OpenGL, X11)
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            cmake \
+            git \
+            libgl1-mesa-dev \
+            libx11-dev \
+            libxrandr-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxinerama-dev
+
+      # Step 3: Configure CMake
+      - name: Configure CMake
+        run: |
+          mkdir -p build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+
+      # Step 4: Build
+      - name: Build
+        run: |
+          cd build
+          cmake --build . --config Release
+
+      # Step 5: Archive build artifacts
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: my-build
+          path: build/
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main'  # Only on main branch push
+
+    steps:
+      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # Step 2: Download build artifact from the previous job
+      - name: Download build artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: my-build
+          path: release-build
+
+      # Step 3: Create GitHub release
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: "v${{ github.run_number }}"
+          name: "Release ${{ github.run_number }}"
+          body: "Automated release from GitHub Actions"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Step 4: Upload build artifacts to the release
+      - name: Upload artifact to release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: release-build/**
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
