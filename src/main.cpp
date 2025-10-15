@@ -42,6 +42,10 @@ bool firstMouse = true;
 float deltaTime = 0.0f;
 float lastFrame = 0.0f;
 
+void framebuffer_size_callback(GLFWwindow* window, int width, int height) {
+    glViewport(0, 0, width, height);
+}
+
 void mouse_callback(GLFWwindow* window, double xpos, double ypos) {
     if (firstMouse) {
         lastX = (float)xpos;
@@ -115,9 +119,13 @@ int main() {
     GLFWwindow* window = glfwCreateWindow(800, 600, "Red Cube with Camera", nullptr, nullptr);
     if (!window) { glfwTerminate(); return -1; }
     glfwMakeContextCurrent(window);
+    glfwSetFramebufferSizeCallback(window, framebuffer_size_callback);
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, mouse_callback);
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) return -1;
+    int width, height;
+    glfwGetFramebufferSize(window, &width, &height);
+    glViewport(0, 0, width, height);
 
     float vertices[] = {
         -0.5f, -0.5f, -0.5f,
