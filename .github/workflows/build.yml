@@ -1,30 +1,33 @@
 name: CMake Build and Release
 
+permissions:
+  contents: write  # Required to create tags/releases
+
 on:
   push:
     branches:
       - main
+      - master
   workflow_dispatch:
 
 jobs:
-  build:
+  build-linux:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout repository with submodules
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # initialize submodules automatically
+          submodules: recursive
 
-      # Step 2: Install dependencies (CMake, build tools, OpenGL, X11)
-      - name: Install dependencies
+      - name: Install dependencies (Linux)
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             cmake \
             git \
+            zip \
             libgl1-mesa-dev \
             libx11-dev \
             libxrandr-dev \
@@ -32,57 +35,118 @@ jobs:
             libxcursor-dev \
             libxinerama-dev
 
-      # Step 3: Configure CMake
-      - name: Configure CMake
+      - name: Configure CMake (Linux)
         run: |
           mkdir -p build
           cd build
           cmake -DCMAKE_BUILD_TYPE=Release ..
 
-      # Step 4: Build
-      - name: Build
+      - name: Build (Linux)
         run: |
           cd build
           cmake --build . --config Release
 
-      # Step 5: Archive build artifacts
-      - name: Upload build artifact
+      - name: Zip build artifacts (Linux)
+        run: |
+          # Zip the contents of build/ into linux-x86_64.zip at repo root
+          zip -r linux-x86_64.zip build/*
+
+      - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: my-build
-          path: build/
+          name: linux-x86_64
+          path: linux-x86_64.zip
 
-  release:
-    needs: build
-    runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'  # Only on main branch push
+  build-windows:
+    runs-on: windows-latest
 
     steps:
-      # Step 1: Checkout code
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Configure CMake (Windows)
+        run: |
+          mkdir build
+          cd build
+          cmake -DCMAKE_BUILD_TYPE=Release ..
+
+      - name: Build (Windows)
+        run: |
+          cd build
+          cmake --build . --config Release
+
+      - name: Zip build artifacts (Windows)
+        run: |
+          powershell Compress-Archive -Path build\* -DestinationPath windows-x86_64.zip
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-x86_64
+          path: windows-x86_64.zip
+
+  release:
+    needs: [build-linux, build-windows]
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+
+    steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Step 2: Download build artifact from the previous job
-      - name: Download build artifact
+      # Download both artifacts to the root folder
+      - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
-          name: my-build
-          path: release-build
+          name: linux-x86_64
+          path: .
 
-      # Step 3: Create GitHub release
-      - name: Create GitHub Release
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: windows-x86_64
+          path: .
+
+      # Create tag automatically (starting at v1.0.0)
+      - name: Create tag
+        id: tag
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+
+          git fetch --tags
+          latest_tag=$(git tag --sort=-creatordate | head -n1)
+
+          if [ -z "$latest_tag" ]; then
+            new_tag="v1.0.0"
+          else
+            tag_core=${latest_tag#v}
+            IFS='.' read -r major minor patch <<< "$tag_core"
+            minor=${minor:-0}
+            patch=${patch:-0}
+            patch=$((patch+1))
+            new_tag="v$major.$minor.$patch"
+          fi
+
+          echo "New tag: $new_tag"
+          git tag $new_tag
+          git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git $new_tag
+          echo "tag=$new_tag" >> $GITHUB_OUTPUT
+          sleep 5  # wait for GitHub to register the tag
+
+      # Create GitHub release and attach both zipped artifacts
+      - name: Create GitHub Release with artifacts
         uses: softprops/action-gh-release@v1
         with:
-          tag_name: "v${{ github.run_number }}"
-          name: "Release ${{ github.run_number }}"
-          body: "Automated release from GitHub Actions"
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          body: Automated release from GitHub Actions
+          files: |
+            linux-x86_64.zip
+            windows-x86_64.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # Step 4: Upload build artifacts to the release
-      - name: Upload artifact to release
-        uses: softprops/action-gh-release@v1
-        with:
-          files: release-build/**
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
