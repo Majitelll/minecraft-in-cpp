@@ -1,7 +1,7 @@
 name: CMake Build and Release
 
 permissions:
-  contents: write  # Required to create tags/releases
+  contents: write
 
 on:
   push:
@@ -27,13 +27,13 @@ jobs:
             build-essential \
             cmake \
             git \
-            zip \
             libgl1-mesa-dev \
             libx11-dev \
             libxrandr-dev \
             libxi-dev \
             libxcursor-dev \
-            libxinerama-dev
+            libxinerama-dev \
+            zip
 
       - name: Configure CMake (Linux)
         run: |
@@ -46,10 +46,17 @@ jobs:
           cd build
           cmake --build . --config Release
 
-      - name: Zip build artifacts (Linux)
+      - name: Zip Linux executable only
         run: |
-          # Zip the contents of build/ into linux-x86_64.zip at repo root
-          zip -r linux-x86_64.zip build/*
+          cd build
+          # Replace 'game' with your actual executable name
+          if [ -f game ]; then
+            zip -j ../linux-x86_64.zip game
+          else
+            echo "Executable not found!"
+            exit 1
+          fi
+          cd ..
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -77,9 +84,16 @@ jobs:
           cd build
           cmake --build . --config Release
 
-      - name: Zip build artifacts (Windows)
+      - name: Zip Windows executable only
         run: |
-          powershell Compress-Archive -Path build\* -DestinationPath windows-x86_64.zip
+          # Adjust path if using multi-config generator
+          $exe = "build\Release\game.exe"
+          if (Test-Path $exe) {
+            Compress-Archive -Path $exe -DestinationPath windows-x86_64.zip -Force
+          } else {
+            Write-Error "Executable not found at $exe"
+            exit 1
+          }
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
@@ -96,7 +110,6 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # Download both artifacts to the root folder
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
         with:
@@ -109,7 +122,6 @@ jobs:
           name: windows-x86_64
           path: .
 
-      # Create tag automatically (starting at v1.0.0)
       - name: Create tag
         id: tag
         env:
@@ -136,9 +148,8 @@ jobs:
           git tag $new_tag
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git $new_tag
           echo "tag=$new_tag" >> $GITHUB_OUTPUT
-          sleep 5  # wait for GitHub to register the tag
+          sleep 5
 
-      # Create GitHub release and attach both zipped artifacts
       - name: Create GitHub Release with artifacts
         uses: softprops/action-gh-release@v1
         with:
