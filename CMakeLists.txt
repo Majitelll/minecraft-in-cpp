@@ -24,11 +24,6 @@ add_executable(game
     src/glad.c
 )
 
-# On Windows, add a WinMain wrapper to prevent the terminal from opening
-if(WIN32)
-    target_sources(game PRIVATE src/winmain_wrapper.cpp)
-endif()
-
 target_include_directories(game PRIVATE include)
 
 target_link_libraries(game
