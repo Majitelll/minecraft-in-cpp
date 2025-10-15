@@ -4,7 +4,8 @@ if(POLICY CMP0072)
     cmake_policy(SET CMP0072 NEW)
 endif()
 
-project(GLFWWindowExample VERSION 1.0)
+# Project renamed to 'game'
+project(game VERSION 1.0)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED True)
@@ -17,13 +18,19 @@ add_subdirectory(vendors/cglm)
 
 find_package(OpenGL REQUIRED)
 
-add_executable(GLFWWindowExample
+# Executable renamed to 'game'
+add_executable(game
     src/main.cpp
     src/glad.c
 )
 
-target_include_directories(GLFWWindowExample PRIVATE include)
+# On Windows, add a WinMain wrapper to prevent the terminal from opening
+if(WIN32)
+    target_sources(game PRIVATE src/winmain_wrapper.cpp)
+endif()
 
-target_link_libraries(GLFWWindowExample
+target_include_directories(game PRIVATE include)
+
+target_link_libraries(game
     PRIVATE glfw OpenGL::GL cglm
 )
