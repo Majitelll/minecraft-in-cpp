@@ -4,15 +4,23 @@
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
 
+#include "chunkmanager.h"
+
 #include <array>
 #include <optional>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 static constexpr int MAX_FRAMES = 2;
 
-struct UBO {
-    mat4 mvp;
+struct UBO { mat4 mvp; };
+
+// Per-chunk GPU resources
+struct ChunkBuffers {
+    VkBuffer       vertexBuffer = VK_NULL_HANDLE;
+    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
+    uint32_t       vertexCount  = 0;
 };
 
 class App {
@@ -23,7 +31,7 @@ private:
     // ── window ────────────────────────────────────────────────────────────
     GLFWwindow* window = nullptr;
 
-    // ── core Vulkan ───────────────────────────────────────────────────────
+    // ── Vulkan core ───────────────────────────────────────────────────────
     VkInstance               instance       = VK_NULL_HANDLE;
     VkDebugUtilsMessengerEXT debugMessenger = VK_NULL_HANDLE;
     VkSurfaceKHR             surface        = VK_NULL_HANDLE;
@@ -33,13 +41,13 @@ private:
     VkQueue                  presentQueue   = VK_NULL_HANDLE;
 
     // ── swapchain ─────────────────────────────────────────────────────────
-    VkSwapchainKHR             swapchain = VK_NULL_HANDLE;
-    std::vector<VkImage>       scImages;
-    std::vector<VkImageView>   scViews;
-    VkFormat                   scFormat{};
-    VkExtent2D                 scExtent{};
+    VkSwapchainKHR           swapchain = VK_NULL_HANDLE;
+    std::vector<VkImage>     scImages;
+    std::vector<VkImageView> scViews;
+    VkFormat                 scFormat{};
+    VkExtent2D               scExtent{};
 
-    // ── render pass & pipeline ────────────────────────────────────────────
+    // ── render pass & pipelines ───────────────────────────────────────────
     VkRenderPass          renderPass   = VK_NULL_HANDLE;
     VkDescriptorSetLayout descLayout   = VK_NULL_HANDLE;
     VkPipelineLayout      pipeLayout   = VK_NULL_HANDLE;
@@ -54,10 +62,8 @@ private:
     // ── framebuffers ──────────────────────────────────────────────────────
     std::vector<VkFramebuffer> framebuffers;
 
-    // ── vertex buffer ─────────────────────────────────────────────────────
-    VkBuffer       vertexBuffer = VK_NULL_HANDLE;
-    VkDeviceMemory vertexMemory = VK_NULL_HANDLE;
-    uint32_t       vertexCount  = 0;
+    // ── per-chunk GPU buffers ─────────────────────────────────────────────
+    std::unordered_map<ChunkPos, ChunkBuffers, ChunkPosHash> chunkBuffers;
 
     // ── uniform buffers ───────────────────────────────────────────────────
     std::vector<VkBuffer>       ubos;
@@ -74,12 +80,15 @@ private:
     std::vector<VkSemaphore>     imgAvail;
     std::vector<VkSemaphore>     renderDone;
     std::vector<VkFence>         inFlight;
-    uint32_t                     currentFrame  = 0;
-    uint32_t                     imgAvailIdx   = 0;
+    uint32_t                     currentFrame = 0;
+    uint32_t                     imgAvailIdx  = 0;
 
     bool framebufferResized = false;
 
-    // ── internal helpers ──────────────────────────────────────────────────
+    // ── world ─────────────────────────────────────────────────────────────
+    ChunkManager chunkManager{42};
+
+    // ── helpers ───────────────────────────────────────────────────────────
     struct QueueFamilies {
         std::optional<uint32_t> graphics, present;
         bool complete() const { return graphics.has_value() && present.has_value(); }
@@ -104,20 +113,25 @@ private:
     void createDepthResources();
     void createFramebuffers();
     void createCommandPool();
-    void createVertexBuffer();
     void createUniformBuffers();
     void createDescriptorPool();
     void createDescriptorSets();
     void createCommandBuffers();
     void createSyncObjects();
+
+    // Upload a finished mesh to GPU (main thread only)
+    void uploadChunkMesh(const UploadRequest& req);
+    // Free GPU buffers for a chunk
+    void destroyChunkBuffers(ChunkPos pos);
+
     void updateUniformBuffer(uint32_t frame);
     void recordCommandBuffer(VkCommandBuffer cb, uint32_t imgIdx);
     void cleanupSwapchain();
     void recreateSwapchain();
 
-    QueueFamilies   findQueueFamilies(VkPhysicalDevice dev);
-    bool            deviceSuitable(VkPhysicalDevice dev);
-    bool            checkValidationSupport();
+    QueueFamilies            findQueueFamilies(VkPhysicalDevice dev);
+    bool                     deviceSuitable(VkPhysicalDevice dev);
+    bool                     checkValidationSupport();
     std::vector<const char*> getRequiredExtensions();
 
     VkSurfaceFormatKHR chooseSurfaceFormat(const std::vector<VkSurfaceFormatKHR>& fmts);

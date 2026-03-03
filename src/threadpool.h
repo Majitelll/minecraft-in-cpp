@@ -1,0 +1,52 @@
+#pragma once
+
+#include <condition_variable>
+#include <functional>
+#include <mutex>
+#include <queue>
+#include <thread>
+#include <vector>
+
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t numThreads) {
+        for (size_t i = 0; i < numThreads; i++) {
+            workers.emplace_back([this] {
+                for (;;) {
+                    std::function<void()> task;
+                    {
+                        std::unique_lock<std::mutex> lock(mtx);
+                        cv.wait(lock, [this] { return stop || !tasks.empty(); });
+                        if (stop && tasks.empty()) return;
+                        task = std::move(tasks.front());
+                        tasks.pop();
+                    }
+                    task();
+                }
+            });
+        }
+    }
+
+    ~ThreadPool() {
+        { std::unique_lock<std::mutex> lock(mtx); stop = true; }
+        cv.notify_all();
+        for (auto& w : workers) w.join();
+    }
+
+    void enqueue(std::function<void()> task) {
+        { std::unique_lock<std::mutex> lock(mtx); tasks.push(std::move(task)); }
+        cv.notify_one();
+    }
+
+    size_t queueSize() {
+        std::unique_lock<std::mutex> lock(mtx);
+        return tasks.size();
+    }
+
+private:
+    std::vector<std::thread>          workers;
+    std::queue<std::function<void()>> tasks;
+    std::mutex                        mtx;
+    std::condition_variable           cv;
+    bool                              stop = false;
+};
