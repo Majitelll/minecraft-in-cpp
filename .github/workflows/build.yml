@@ -30,6 +30,7 @@ jobs:
             libvulkan-dev \
             vulkan-tools \
             glslc \
+            libgl-dev \
             libx11-dev \
             libxrandr-dev \
             libxi-dev \
