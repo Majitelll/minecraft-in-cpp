@@ -15,44 +15,13 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cache Vulkan SDK
-        id: cache-vulkan
-        uses: actions/cache@v4
-        with:
-          path: C:\VulkanSDK\1.4.341.1
-          key: vulkan-sdk-1.4.341.1
-
       - name: Install Vulkan SDK
-        if: steps.cache-vulkan.outputs.cache-hit != 'true'
-        shell: powershell
-        run: |
-          $version = "1.4.341.1"
-          $url = "https://sdk.lunarg.com/sdk/download/$version/windows/vulkansdk-windows-X64-$version.exe"
-          Write-Host "Downloading Vulkan SDK..."
-          Invoke-WebRequest -Uri $url -OutFile VulkanSDK.exe -TimeoutSec 300
-          Write-Host "Checking installer type..."
-          # Print the first few bytes to identify installer format
-          $bytes = [System.IO.File]::ReadAllBytes("VulkanSDK.exe")
-          Write-Host "File size: $($bytes.Length) bytes"
-          # Check for NSIS signature (usually contains 'Nullsoft' string)
-          $text = [System.Text.Encoding]::ASCII.GetString($bytes[0..512])
-          Write-Host "Header snippet: $text"
-          Write-Host "Trying --help to see accepted flags..."
-          $proc = Start-Process -FilePath VulkanSDK.exe -ArgumentList "--help" -Wait -PassThru -RedirectStandardOutput help.txt -ErrorAction SilentlyContinue
-          Get-Content help.txt -ErrorAction SilentlyContinue
-          Write-Host "Listing C:\ before install:"
-          Get-ChildItem "C:\" | Select-Object Name
-          Write-Host "Running installer with --accept-licenses --default-answer --confirm-command..."
-          Start-Process -FilePath VulkanSDK.exe -ArgumentList "--accept-licenses --default-answer --confirm-command install" -Wait
-          Write-Host "Listing C:\VulkanSDK after install:"
-          Get-ChildItem "C:\VulkanSDK" -ErrorAction SilentlyContinue | Select-Object Name
-
-      - name: Set Vulkan SDK env
-        shell: powershell
-        run: |
-          $sdkPath = "C:\VulkanSDK\1.4.341.1"
-          echo "VULKAN_SDK=$sdkPath" >> $env:GITHUB_ENV
-          echo "$sdkPath\Bin" >> $env:GITHUB_PATH
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.341.1
+          optional_components: com.lunarg.vulkan.glslc
+          install_runtime: true
+          cache: true
 
       - name: Configure CMake
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release
