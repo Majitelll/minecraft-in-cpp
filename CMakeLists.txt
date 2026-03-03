@@ -56,6 +56,9 @@ add_custom_target(shaders ALL DEPENDS ${VERT_SPV} ${FRAG_SPV})
 # ── Executable ───────────────────────────────────────────────────────────────
 add_executable(game
     src/main.cpp
+    src/app.cpp
+    src/camera.cpp
+    src/chunk.cpp
 )
 
 add_dependencies(game shaders)
