@@ -27,7 +27,9 @@ jobs:
             build-essential \
             cmake \
             git \
-            libgl1-mesa-dev \
+            libvulkan-dev \
+            vulkan-tools \
+            glslang-tools \
             libx11-dev \
             libxrandr-dev \
             libxi-dev \
@@ -46,17 +48,16 @@ jobs:
           cd build
           cmake --build . --config Release
 
-      - name: Zip Linux executable only
+      - name: Zip Linux executable and shaders
         run: |
           cd build
-          # Replace 'game' with your actual executable name
           if [ -f game ]; then
             zip -j ../linux-x86_64.zip game
+            zip -r ../linux-x86_64.zip shaders/
           else
             echo "Executable not found!"
             exit 1
           fi
-          cd ..
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
@@ -73,6 +74,12 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Install Vulkan SDK
+        uses: humbletim/install-vulkan-sdk@v1.1.1
+        with:
+          version: latest
+          cache: true
+
       - name: Configure CMake (Windows)
         run: |
           mkdir build
@@ -84,12 +91,15 @@ jobs:
           cd build
           cmake --build . --config Release
 
-      - name: Zip Windows executable only
+      - name: Zip Windows executable and shaders
         run: |
-          # Adjust path if using multi-config generator
           $exe = "build\Release\game.exe"
+          $shaders = "build\Release\shaders"
           if (Test-Path $exe) {
             Compress-Archive -Path $exe -DestinationPath windows-x86_64.zip -Force
+            if (Test-Path $shaders) {
+              Compress-Archive -Path $shaders -DestinationPath windows-x86_64.zip -Update
+            }
           } else {
             Write-Error "Executable not found at $exe"
             exit 1
@@ -109,6 +119,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # needed to see all tags
 
       - name: Download Linux artifact
         uses: actions/download-artifact@v4
@@ -125,7 +137,7 @@ jobs:
       - name: Create tag
         id: tag
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
@@ -148,10 +160,9 @@ jobs:
           git tag $new_tag
           git push https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git $new_tag
           echo "tag=$new_tag" >> $GITHUB_OUTPUT
-          sleep 5
 
       - name: Create GitHub Release with artifacts
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
           name: Release ${{ steps.tag.outputs.tag }}
@@ -160,4 +171,4 @@ jobs:
             linux-x86_64.zip
             windows-x86_64.zip
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
