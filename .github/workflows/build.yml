@@ -112,10 +112,80 @@ jobs:
           name: macos-arm64
           path: macos-arm64.zip
 
+  # ── Linux ARM64 ──────────────────────────────────────────────────────────────
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libvulkan-dev vulkan-tools glslc \
+            libgl-dev libx11-dev libxrandr-dev \
+            libxinerama-dev libxcursor-dev libxi-dev \
+            libwayland-dev wayland-protocols libxkbcommon-dev
+
+      - name: Configure CMake
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_WAYLAND=OFF
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp build/game artifact/
+          cp -r build/shaders artifact/
+          zip -r linux-arm64.zip artifact/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64
+          path: linux-arm64.zip
+
+  # ── macOS Intel (x64) ────────────────────────────────────────────────────────
+  build-macos-intel:
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Vulkan SDK + MoltenVK
+        run: |
+          brew install vulkan-headers molten-vk shaderc
+          echo "$(brew --prefix shaderc)/bin" >> $GITHUB_PATH
+
+      - name: Configure CMake
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release \
+            -DVulkan_INCLUDE_DIR=$(brew --prefix vulkan-headers)/include \
+            -DVulkan_LIBRARY=$(brew --prefix molten-vk)/lib/libMoltenVK.dylib \
+            -DGLSLC=$(brew --prefix shaderc)/bin/glslc
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Package
+        run: |
+          mkdir -p artifact
+          cp build/game artifact/
+          cp -r build/shaders artifact/
+          zip -r macos-x86_64.zip artifact/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64
+          path: macos-x86_64.zip
+
   # ── Release ──────────────────────────────────────────────────────────────────
   release:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-windows, build-linux, build-macos]
+    needs: [build-windows, build-linux, build-linux-arm64, build-macos, build-macos-intel]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -140,6 +210,8 @@ jobs:
           files: |
             artifacts/windows-x86_64/windows-x86_64.zip
             artifacts/linux-x86_64/linux-x86_64.zip
+            artifacts/linux-arm64/linux-arm64.zip
             artifacts/macos-arm64/macos-arm64.zip
+            artifacts/macos-x86_64/macos-x86_64.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
