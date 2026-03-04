@@ -65,10 +65,10 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p artifact
-          cp build/game artifact/
-          cp -r build/shaders artifact/
-          zip -r linux-x86_64.zip artifact/
+          mkdir -p package
+          cp build/game package/
+          cp -r build/shaders package/
+          cd package && zip -r ../linux-x86_64.zip .
 
       - uses: actions/upload-artifact@v4
         with:
@@ -102,10 +102,10 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p artifact
-          cp build/game artifact/
-          cp -r build/shaders artifact/
-          zip -r macos-arm64.zip artifact/
+          mkdir -p package
+          cp build/game package/
+          cp -r build/shaders package/
+          cd package && zip -r ../macos-arm64.zip .
 
       - uses: actions/upload-artifact@v4
         with:
@@ -137,10 +137,10 @@ jobs:
 
       - name: Package
         run: |
-          mkdir -p artifact
-          cp build/game artifact/
-          cp -r build/shaders artifact/
-          zip -r linux-arm64.zip artifact/
+          mkdir -p package
+          cp build/game package/
+          cp -r build/shaders package/
+          cd package && zip -r ../linux-arm64.zip .
 
       - uses: actions/upload-artifact@v4
         with:
