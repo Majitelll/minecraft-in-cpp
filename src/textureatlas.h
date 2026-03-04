@@ -13,11 +13,13 @@ enum class TileID : int {
     Leaves     = 7,
     Snow       = 8,
     SnowSide   = 9,  // snow strip on top, stone below
-    COUNT      = 10
+    UISlot     = 10, // minecraft-style hotbar slot
+    UISelector = 11, // hotbar selection frame
+    COUNT      = 12
 };
 
 static constexpr int TILE_SIZE  = 16;
-static constexpr int ATLAS_COLS = 10;
+static constexpr int ATLAS_COLS = 12;
 static constexpr int ATLAS_ROWS = 1;
 static constexpr int ATLAS_W    = TILE_SIZE * ATLAS_COLS;
 static constexpr int ATLAS_H    = TILE_SIZE * ATLAS_ROWS;

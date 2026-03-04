@@ -91,6 +91,9 @@ private:
     uint32_t                     imgAvailIdx  = 0;
 
     bool framebufferResized = false;
+    bool isFullscreen       = false;
+    int  savedWinX=0, savedWinY=0, savedWinW=0, savedWinH=0;
+    bool f11Previous        = false;
 
     // ── world ─────────────────────────────────────────────────────────────
     ChunkManager chunkManager{static_cast<unsigned int>(std::random_device{}())};

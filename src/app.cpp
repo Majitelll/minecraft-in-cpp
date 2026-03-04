@@ -129,6 +129,22 @@ void App::mainLoop() {
                 if (hotbarSlot != i) { hotbarSlot = i; rebuildUIVertices(); }
             }
         }
+ 
+        // ── Fullscreen toggle (F11) ───────────────────────────────────────
+        bool f11Now = glfwGetKey(window, GLFW_KEY_F11) == GLFW_PRESS;
+        if (f11Now && !f11Previous) {
+            isFullscreen = !isFullscreen;
+            if (isFullscreen) {
+                glfwGetWindowPos(window, &savedWinX, &savedWinY);
+                glfwGetWindowSize(window, &savedWinW, &savedWinH);
+                GLFWmonitor* monitor = glfwGetPrimaryMonitor();
+                const GLFWvidmode* mode = glfwGetVideoMode(monitor);
+                glfwSetWindowMonitor(window, monitor, 0, 0, mode->width, mode->height, mode->refreshRate);
+            } else {
+                glfwSetWindowMonitor(window, nullptr, savedWinX, savedWinY, savedWinW, savedWinH, 0);
+            }
+        }
+        f11Previous = f11Now;
 
         // ── Scroll wheel selection ────────────────────────────────────────
         if (scrollAccum != 0.0) {
@@ -282,8 +298,10 @@ void App::handleBlockInteraction() {
     if (!hit.hit) return;
 
     if (leftPressed) {
-        // Break block
-        setBlockInWorld(hit.blockX, hit.blockY, hit.blockZ, BlockType::Air);
+        // Break block - but not the bottom bedrock layer!
+        if (!(hit.type == BlockType::Bedrock && hit.blockY == 0)) {
+            setBlockInWorld(hit.blockX, hit.blockY, hit.blockZ, BlockType::Air);
+        }
     } else if (rightPressed) {
         // Place block on the face normal
         int px = hit.blockX + hit.normalX;
@@ -1228,16 +1246,15 @@ void App::rebuildUIVertices() {
     float slotSizeX = slotSize / ar;
     float padding   = 0.014f / ar;
     float totalW    = HOTBAR_SIZE * (slotSizeX + padding) - padding;
-    // Scale to fill ~85% of screen width
-    float targetW   = 1.7f;
+    // Scale to fill ~50% of screen width (was 1.7 for ~85%)
+    float targetW   = 1.0f;
     float scale     = targetW / totalW;
     slotSizeX *= scale;
     slotSize  *= scale;
     padding   *= scale;
     totalW     = HOTBAR_SIZE * (slotSizeX + padding) - padding;
     float startX    = -totalW * 0.5f;
-    float baseY     = -1.0f;            // bottom edge of screen
-    // slots grow upward from baseY
+    float baseY     = 1.0f - slotSize;  // bottom edge of screen (Vulkan Y is down)
 
     std::vector<float> verts;
     verts.reserve(HOTBAR_SIZE * 6 * 4);
@@ -1253,27 +1270,15 @@ void App::rebuildUIVertices() {
     for (int i = 0; i < HOTBAR_SIZE; i++) {
         float x0 = startX + i * (slotSizeX + padding);
         float x1 = x0 + slotSizeX;
-        float y0 = baseY;
-        float y1 = baseY + slotSize;
+        float y0 = baseY - 0.04f; // slight offset from bottom
+        float y1 = y0 + slotSize;
 
-        // Slot background — dark semi-transparent quad (UV from a solid dark region)
-        // We'll use a tiny corner of the bedrock tile for the dark background
-        TileUV bgUV = getTileUV(TileID::Bedrock);
-        float bgAlpha = (i == hotbarSlot) ? 0.85f : 0.45f;
-        // We can't easily pass per-vertex alpha without changing the vertex format,
-        // so instead draw selected slot slightly larger
-        if (i == hotbarSlot) {
-            float expand = 0.008f / ar;
-            pushQuad(x0 - expand, y0 - expand*ar,
-                     x1 + expand, y1 + expand*ar,
-                     bgUV.u0, bgUV.v0, bgUV.u1, bgUV.v1);
-        } else {
-            pushQuad(x0, y0, x1, y1, bgUV.u0, bgUV.v0, bgUV.u1, bgUV.v1);
-        }
+        // Slot background — use UISlot tile
+        TileUV slotUV = getTileUV(TileID::UISlot);
+        pushQuad(x0, y0, x1, y1, slotUV.u0, slotUV.v0, slotUV.u1, slotUV.v1);
 
         // Block face — use top face tile
         BlockType bt = HOTBAR_BLOCKS[i];
-        // Pick representative tile for top face (face index 2 = top)
         TileID tid;
         switch (bt) {
             case BlockType::Grass:   tid = TileID::GrassTop;  break;
@@ -1286,9 +1291,18 @@ void App::rebuildUIVertices() {
             default:                 tid = TileID::Stone;      break;
         }
         TileUV uv = getTileUV(tid);
-        float inset = 0.006f / ar;
-        pushQuad(x0+inset, y0+inset*ar, x1-inset, y1-inset*ar,
-                 uv.u0, uv.v0, uv.u1, uv.v1);
+        float inset = 0.025f;
+        float ix0 = x0 + inset/ar, ix1 = x1 - inset/ar;
+        float iy0 = y0 + inset,    iy1 = y1 - inset;
+        pushQuad(ix0, iy0, ix1, iy1, uv.u0, uv.v0, uv.u1, uv.v1);
+
+        // Selector frame — draw over the active slot
+        if (i == hotbarSlot) {
+            TileUV selUV = getTileUV(TileID::UISelector);
+            float sDir = 0.005f;
+            pushQuad(x0 - sDir/ar, y0 - sDir, x1 + sDir/ar, y1 + sDir,
+                     selUV.u0, selUV.v0, selUV.u1, selUV.v1);
+        }
     }
 
     // Crosshair — two thin quads forming a + in the center

@@ -225,6 +225,53 @@ static void paintSnowSide(std::vector<uint8_t>& img, int ox, int oy) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// UI Tiles
+// ─────────────────────────────────────────────────────────────────────────────
+static void paintUISlot(std::vector<uint8_t>& img, int ox, int oy) {
+    RGBA base={139,139,139,255}; // lighter gray
+    RGBA shadow={55,55,55,255};  // dark gray
+    RGBA light={255,255,255,255}; // white highlights
+
+    // Main body
+    for (int y=1; y<TILE_SIZE-1; y++)
+        for (int x=1; x<TILE_SIZE-1; x++)
+            setPixel(img, ox+x, oy+y, base);
+
+    // Outer border (shadow)
+    for (int i=0; i<TILE_SIZE; i++) {
+        setPixel(img, ox+i, oy, shadow);
+        setPixel(img, ox+i, oy+TILE_SIZE-1, shadow);
+        setPixel(img, ox, oy+i, shadow);
+        setPixel(img, ox+TILE_SIZE-1, oy+i, shadow);
+    }
+
+    // Inner highlights/shadows
+    for (int i=1; i<TILE_SIZE-1; i++) {
+        setPixel(img, ox+i, oy+1, shadow); // top shadow
+        setPixel(img, ox+1, oy+i, shadow); // left shadow
+        setPixel(img, ox+i, oy+TILE_SIZE-2, light); // bottom light
+        setPixel(img, ox+TILE_SIZE-2, oy+i, light); // right light
+    }
+}
+
+static void paintUISelector(std::vector<uint8_t>& img, int ox, int oy) {
+    RGBA white={255,255,255,255};
+    RGBA dark={55,55,55,255};
+
+    // Thick white border with highlights
+    for (int y=0; y<TILE_SIZE; y++) {
+        for (int x=0; x<TILE_SIZE; x++) {
+            bool edge = (x<2 || x>=TILE_SIZE-2 || y<2 || y>=TILE_SIZE-2);
+            if (edge) {
+                // outer blackish pixel
+                bool outer = (x==0 || x==TILE_SIZE-1 || y==0 || y==TILE_SIZE-1);
+                setPixel(img, ox+x, oy+y, outer ? dark : white);
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 std::vector<uint8_t> generateAtlas() {
     std::vector<uint8_t> img(ATLAS_W * ATLAS_H * 4, 0);
 
@@ -238,6 +285,8 @@ std::vector<uint8_t> generateAtlas() {
     paintLeaves   (img, (int)TileID::Leaves    * TILE_SIZE, 0);
     paintSnow     (img, (int)TileID::Snow      * TILE_SIZE, 0);
     paintSnowSide (img, (int)TileID::SnowSide  * TILE_SIZE, 0);
+    paintUISlot   (img, (int)TileID::UISlot    * TILE_SIZE, 0);
+    paintUISelector(img, (int)TileID::UISelector * TILE_SIZE, 0);
 
     return img;
 }
