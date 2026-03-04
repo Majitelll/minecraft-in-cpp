@@ -6,6 +6,7 @@
 #include <random>
 
 #include "chunkmanager.h"
+#include "raycast.h"
 #include <array>
 #include <optional>
 #include <string>
@@ -93,6 +94,26 @@ private:
 
     // ── world ─────────────────────────────────────────────────────────────
     ChunkManager chunkManager{static_cast<unsigned int>(std::random_device{}())};
+
+    // ── hotbar ────────────────────────────────────────────────────────────
+    static constexpr int HOTBAR_SIZE = 7;
+    static const BlockType HOTBAR_BLOCKS[HOTBAR_SIZE];
+    int  hotbarSlot    = 0;   // 0-6
+    bool leftPressed   = false;
+    bool rightPressed  = false;
+    double scrollAccum = 0.0;
+
+    void handleBlockInteraction();
+    void setBlockInWorld(int wx, int wy, int wz, BlockType type);
+
+    // ── hotbar UI ─────────────────────────────────────────────────────────
+    VkPipeline       uiPipeline      = VK_NULL_HANDLE;
+    VkBuffer         uiVertexBuf     = VK_NULL_HANDLE;
+    VkDeviceMemory   uiVertexMem     = VK_NULL_HANDLE;
+    uint32_t         uiVertexCount   = 0;
+
+    void createUIPipeline();
+    void rebuildUIVertices();         // called when slot changes or window resizes
 
     // ── helpers ───────────────────────────────────────────────────────────
     struct QueueFamilies {

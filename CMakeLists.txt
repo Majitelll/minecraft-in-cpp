@@ -101,8 +101,10 @@ set(SHADER_DIR ${CMAKE_SOURCE_DIR}/src/shaders)
 set(SHADER_OUT ${CMAKE_BINARY_DIR}/shaders)
 file(MAKE_DIRECTORY ${SHADER_OUT})
 
-set(VERT_SPV ${SHADER_OUT}/vert.spv)
-set(FRAG_SPV ${SHADER_OUT}/frag.spv)
+set(VERT_SPV    ${SHADER_OUT}/vert.spv)
+set(FRAG_SPV    ${SHADER_OUT}/frag.spv)
+set(UI_VERT_SPV ${SHADER_OUT}/ui_vert.spv)
+set(UI_FRAG_SPV ${SHADER_OUT}/ui_frag.spv)
 
 add_custom_command(
     OUTPUT ${VERT_SPV}
@@ -114,12 +116,24 @@ add_custom_command(
     COMMAND ${GLSLC} ${SHADER_DIR}/frag.frag -o ${FRAG_SPV}
     DEPENDS ${SHADER_DIR}/frag.frag
 )
-add_custom_target(shaders DEPENDS ${VERT_SPV} ${FRAG_SPV})
+add_custom_command(
+    OUTPUT ${UI_VERT_SPV}
+    COMMAND ${GLSLC} ${SHADER_DIR}/ui_vert.vert -o ${UI_VERT_SPV}
+    DEPENDS ${SHADER_DIR}/ui_vert.vert
+)
+add_custom_command(
+    OUTPUT ${UI_FRAG_SPV}
+    COMMAND ${GLSLC} ${SHADER_DIR}/ui_frag.frag -o ${UI_FRAG_SPV}
+    DEPENDS ${SHADER_DIR}/ui_frag.frag
+)
+add_custom_target(shaders DEPENDS ${VERT_SPV} ${FRAG_SPV} ${UI_VERT_SPV} ${UI_FRAG_SPV})
 add_dependencies(game shaders)
 
 # Copy compiled shaders next to the executable
 add_custom_command(TARGET game POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E make_directory $<TARGET_FILE_DIR:game>/shaders
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${VERT_SPV} $<TARGET_FILE_DIR:game>/shaders/vert.spv
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FRAG_SPV} $<TARGET_FILE_DIR:game>/shaders/frag.spv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${VERT_SPV}    $<TARGET_FILE_DIR:game>/shaders/vert.spv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${FRAG_SPV}    $<TARGET_FILE_DIR:game>/shaders/frag.spv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UI_VERT_SPV} $<TARGET_FILE_DIR:game>/shaders/ui_vert.spv
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different ${UI_FRAG_SPV} $<TARGET_FILE_DIR:game>/shaders/ui_frag.spv
 )

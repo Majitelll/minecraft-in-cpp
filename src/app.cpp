@@ -1,6 +1,7 @@
 #include "app.h"
 #include "camera.h"
 #include "textureatlas.h"
+#include "raycast.h"
 
 #include <algorithm>
 #include <array>
@@ -12,8 +13,18 @@
 #include <set>
 #include <stdexcept>
 
-// Defined in main.cpp — no-op in Release builds
 void logMsg(const std::string& msg);
+
+// Hotbar block order
+const BlockType App::HOTBAR_BLOCKS[App::HOTBAR_SIZE] = {
+    BlockType::Grass,
+    BlockType::Dirt,
+    BlockType::Stone,
+    BlockType::Wood,
+    BlockType::Leaves,
+    BlockType::Snow,
+    BlockType::Bedrock,
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -93,6 +104,8 @@ void App::initVulkan() {
     logMsg("  createDescSets");       createDescriptorSets();
     logMsg("  createCommandBuffers"); createCommandBuffers();
     logMsg("  createSyncObjects");    createSyncObjects();
+    logMsg("  createUIPipeline");     createUIPipeline();
+    rebuildUIVertices();
     logMsg("  initVulkan done");
 }
 
@@ -105,6 +118,31 @@ void App::mainLoop() {
         lastFrame = now;
         glfwPollEvents();
         processInput(window);
+
+        // ── Hotbar key selection (1-7) ────────────────────────────────────
+        static const int hotbarKeys[7] = {
+            GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4,
+            GLFW_KEY_5, GLFW_KEY_6, GLFW_KEY_7
+        };
+        for (int i = 0; i < HOTBAR_SIZE; i++) {
+            if (glfwGetKey(window, hotbarKeys[i]) == GLFW_PRESS) {
+                if (hotbarSlot != i) { hotbarSlot = i; rebuildUIVertices(); }
+            }
+        }
+
+        // ── Scroll wheel selection ────────────────────────────────────────
+        if (scrollAccum != 0.0) {
+            int delta = (scrollAccum > 0) ? -1 : 1;
+            hotbarSlot = (hotbarSlot + delta + HOTBAR_SIZE) % HOTBAR_SIZE;
+            scrollAccum = 0.0;
+            rebuildUIVertices();
+        }
+
+        // ── Block break / place ───────────────────────────────────────────
+        if (leftPressed || rightPressed) {
+            handleBlockInteraction();
+            leftPressed = rightPressed = false;
+        }
 
         int playerChunkX = (int)floorf(camera.position[0] / (float)CHUNK_SIZE);
         int playerChunkZ = (int)floorf(camera.position[2] / (float)CHUNK_SIZE);
@@ -193,6 +231,73 @@ void App::drawFrame() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Chunk GPU management
 // ─────────────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────────────
+// Block interaction
+// ─────────────────────────────────────────────────────────────────────────────
+void App::setBlockInWorld(int wx, int wy, int wz, BlockType type) {
+    if (wy < 0 || wy >= CHUNK_HEIGHT) return;
+    int cx = (int)floorf((float)wx / (float)CHUNK_SIZE);
+    int cz = (int)floorf((float)wz / (float)CHUNK_SIZE);
+    int lx = wx - cx * CHUNK_SIZE;
+    int lz = wz - cz * CHUNK_SIZE;
+    Chunk* chunk = chunkManager.getChunk(cx, cz);
+    if (!chunk) return;
+    chunk->blocks[lx][wy][lz] = type;
+    // Remesh this chunk and any neighbors whose border might be affected
+    auto remesh = [&](int ccx, int ccz) {
+        Chunk* c = chunkManager.getChunk(ccx, ccz);
+        if (!c) return;
+        Chunk* neighbors[3][3]{};
+        for (int dx=-1;dx<=1;dx++)
+            for (int dz=-1;dz<=1;dz++)
+                neighbors[dx+1][dz+1] = chunkManager.getChunk(ccx+dx, ccz+dz);
+        auto verts = c->buildMesh(ccx, ccz, neighbors);
+        UploadRequest req{ChunkPos{ccx,ccz}, std::move(verts)};
+        uploadChunkMesh(req);
+        chunkManager.markUploaded({ccx,ccz});
+    };
+    remesh(cx, cz);
+    // Remesh neighbors if block is on a chunk border
+    if (lx == 0)              remesh(cx-1, cz);
+    if (lx == CHUNK_SIZE-1)   remesh(cx+1, cz);
+    if (lz == 0)              remesh(cx, cz-1);
+    if (lz == CHUNK_SIZE-1)   remesh(cx, cz+1);
+}
+
+void App::handleBlockInteraction() {
+    // Build look direction from camera
+    vec3 front = {
+        cosf(glm_rad(camera.yaw))  * cosf(glm_rad(camera.pitch)),
+        sinf(glm_rad(camera.pitch)),
+        sinf(glm_rad(camera.yaw))  * cosf(glm_rad(camera.pitch))
+    };
+    glm_vec3_normalize(front);
+
+    vec3 rayOrigin = {
+        camera.position[0],
+        camera.position[1],
+        camera.position[2]
+    };
+    RayHit hit = castRay(rayOrigin, front, 8.f, chunkManager);
+    if (!hit.hit) return;
+
+    if (leftPressed) {
+        // Break block
+        setBlockInWorld(hit.blockX, hit.blockY, hit.blockZ, BlockType::Air);
+    } else if (rightPressed) {
+        // Place block on the face normal
+        int px = hit.blockX + hit.normalX;
+        int py = hit.blockY + hit.normalY;
+        int pz = hit.blockZ + hit.normalZ;
+        // Don't place inside the player
+        float dx = (float)px + 0.5f - camera.position[0];
+        float dy = (float)py + 0.5f - camera.position[1];
+        float dz = (float)pz + 0.5f - camera.position[2];
+        if (fabsf(dx)<0.9f && fabsf(dy)<1.8f && fabsf(dz)<0.9f) return;
+        setBlockInWorld(px, py, pz, HOTBAR_BLOCKS[hotbarSlot]);
+    }
+}
+
 void App::uploadChunkMesh(const UploadRequest& req) {
     logMsg("uploadChunkMesh: (" + std::to_string(req.pos.x) + "," + std::to_string(req.pos.z) + ") verts=" + std::to_string(req.vertices.size()));
     destroyChunkBuffers(req.pos);
@@ -247,6 +352,14 @@ void App::initWindow() {
     });
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_DISABLED);
     glfwSetCursorPosCallback(window, mouseCallback);
+    glfwSetScrollCallback(window, [](GLFWwindow* w, double, double dy) {
+        static_cast<App*>(glfwGetWindowUserPointer(w))->scrollAccum += dy;
+    });
+    glfwSetMouseButtonCallback(window, [](GLFWwindow* w, int btn, int action, int) {
+        App* app = static_cast<App*>(glfwGetWindowUserPointer(w));
+        if (btn == GLFW_MOUSE_BUTTON_LEFT  && action == GLFW_PRESS) app->leftPressed  = true;
+        if (btn == GLFW_MOUSE_BUTTON_RIGHT && action == GLFW_PRESS) app->rightPressed = true;
+    });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -983,6 +1096,14 @@ void App::recordCommandBuffer(VkCommandBuffer cb, uint32_t imgIdx) {
         vkCmdDraw(cb, buf.vertexCount, 1, 0, 0);
     }
 
+    // Draw UI (hotbar + crosshair) — no depth test, on top of everything
+    if (uiVertexBuf != VK_NULL_HANDLE && uiVertexCount > 0) {
+        vkCmdBindPipeline(cb, VK_PIPELINE_BIND_POINT_GRAPHICS, uiPipeline);
+        VkDeviceSize offset = 0;
+        vkCmdBindVertexBuffers(cb, 0, 1, &uiVertexBuf, &offset);
+        vkCmdDraw(cb, uiVertexCount, 1, 0, 0);
+    }
+
     vkCmdEndRenderPass(cb);
     if (vkEndCommandBuffer(cb) != VK_SUCCESS)
         throw std::runtime_error("vkEndCommandBuffer failed");
@@ -1008,6 +1129,192 @@ void App::createSyncObjects() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// UI Pipeline — 2D ortho, no depth test, same atlas descriptor
+// Vertex format: xy uv (4 floats)
+// ─────────────────────────────────────────────────────────────────────────────
+void App::createUIPipeline() {
+    auto vert = readFile("shaders/ui_vert.spv");
+    auto frag = readFile("shaders/ui_frag.spv");
+    VkShaderModule vs = makeShaderModule(vert);
+    VkShaderModule fs = makeShaderModule(frag);
+
+    VkPipelineShaderStageCreateInfo stages[2]{};
+    stages[0].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[0].stage  = VK_SHADER_STAGE_VERTEX_BIT;
+    stages[0].module = vs; stages[0].pName = "main";
+    stages[1].sType  = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    stages[1].stage  = VK_SHADER_STAGE_FRAGMENT_BIT;
+    stages[1].module = fs; stages[1].pName = "main";
+
+    // xy uv — 4 floats
+    VkVertexInputBindingDescription bind{0, 4*sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[2] = {
+        {0, 0, VK_FORMAT_R32G32_SFLOAT, 0},
+        {1, 0, VK_FORMAT_R32G32_SFLOAT, 2*sizeof(float)}
+    };
+    VkPipelineVertexInputStateCreateInfo vi{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};
+    vi.vertexBindingDescriptionCount   = 1; vi.pVertexBindingDescriptions   = &bind;
+    vi.vertexAttributeDescriptionCount = 2; vi.pVertexAttributeDescriptions = attrs;
+
+    VkPipelineInputAssemblyStateCreateInfo ia{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
+    ia.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+
+    VkPipelineViewportStateCreateInfo vs2{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};
+    vs2.viewportCount = 1; vs2.scissorCount = 1;
+
+    VkPipelineRasterizationStateCreateInfo rs{VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO};
+    rs.polygonMode = VK_POLYGON_MODE_FILL;
+    rs.cullMode    = VK_CULL_MODE_NONE;
+    rs.frontFace   = VK_FRONT_FACE_COUNTER_CLOCKWISE;
+    rs.lineWidth   = 1.f;
+
+    VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};
+    ms.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // No depth test — UI always on top
+    VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};
+    ds.depthTestEnable  = VK_FALSE;
+    ds.depthWriteEnable = VK_FALSE;
+
+    // Alpha blending for slot highlight
+    VkPipelineColorBlendAttachmentState cba{};
+    cba.blendEnable         = VK_TRUE;
+    cba.srcColorBlendFactor = VK_BLEND_FACTOR_SRC_ALPHA;
+    cba.dstColorBlendFactor = VK_BLEND_FACTOR_ONE_MINUS_SRC_ALPHA;
+    cba.colorBlendOp        = VK_BLEND_OP_ADD;
+    cba.srcAlphaBlendFactor = VK_BLEND_FACTOR_ONE;
+    cba.dstAlphaBlendFactor = VK_BLEND_FACTOR_ZERO;
+    cba.alphaBlendOp        = VK_BLEND_OP_ADD;
+    cba.colorWriteMask      = VK_COLOR_COMPONENT_R_BIT|VK_COLOR_COMPONENT_G_BIT|
+                              VK_COLOR_COMPONENT_B_BIT|VK_COLOR_COMPONENT_A_BIT;
+    VkPipelineColorBlendStateCreateInfo cbs{VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO};
+    cbs.attachmentCount = 1; cbs.pAttachments = &cba;
+
+    VkDynamicState dynStates[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
+    VkPipelineDynamicStateCreateInfo dyn{VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO};
+    dyn.dynamicStateCount = 2; dyn.pDynamicStates = dynStates;
+
+    VkGraphicsPipelineCreateInfo ci{VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO};
+    ci.stageCount          = 2;   ci.pStages             = stages;
+    ci.pVertexInputState   = &vi; ci.pInputAssemblyState = &ia;
+    ci.pViewportState      = &vs2; ci.pRasterizationState = &rs;
+    ci.pMultisampleState   = &ms; ci.pDepthStencilState  = &ds;
+    ci.pColorBlendState    = &cbs; ci.pDynamicState       = &dyn;
+    ci.layout              = pipeLayout; // reuse same layout — same descriptor set
+    ci.renderPass          = renderPass;
+
+    if (vkCreateGraphicsPipelines(device, VK_NULL_HANDLE, 1, &ci, nullptr, &uiPipeline) != VK_SUCCESS)
+        throw std::runtime_error("createUIPipeline failed");
+
+    vkDestroyShaderModule(device, vs, nullptr);
+    vkDestroyShaderModule(device, fs, nullptr);
+}
+
+// Build a hotbar quad for one slot: NDC coords, UV from atlas top face of block
+// Each slot = 2 triangles = 6 vertices × 4 floats (xy uv)
+void App::rebuildUIVertices() {
+    if (uiVertexBuf != VK_NULL_HANDLE) {
+        vkDeviceWaitIdle(device);
+        vkDestroyBuffer(device, uiVertexBuf, nullptr);
+        vkFreeMemory(device, uiVertexMem, nullptr);
+        uiVertexBuf = VK_NULL_HANDLE;
+    }
+
+    int w, h; glfwGetFramebufferSize(window, &w, &h);
+    if (w == 0 || h == 0) return;
+
+    float ar        = (float)w / (float)h;
+    float slotSize  = 0.10f;             // shorter height
+    float slotSizeX = slotSize / ar;
+    float padding   = 0.014f / ar;
+    float totalW    = HOTBAR_SIZE * (slotSizeX + padding) - padding;
+    // Scale to fill ~85% of screen width
+    float targetW   = 1.7f;
+    float scale     = targetW / totalW;
+    slotSizeX *= scale;
+    slotSize  *= scale;
+    padding   *= scale;
+    totalW     = HOTBAR_SIZE * (slotSizeX + padding) - padding;
+    float startX    = -totalW * 0.5f;
+    float baseY     = -1.0f;            // bottom edge of screen
+    // slots grow upward from baseY
+
+    std::vector<float> verts;
+    verts.reserve(HOTBAR_SIZE * 6 * 4);
+
+    auto pushQuad = [&](float x0, float y0, float x1, float y1,
+                        float u0, float v0, float u1, float v1) {
+        // tri 1
+        verts.insert(verts.end(), {x0,y0,u0,v1, x1,y0,u1,v1, x1,y1,u1,v0});
+        // tri 2
+        verts.insert(verts.end(), {x0,y0,u0,v1, x1,y1,u1,v0, x0,y1,u0,v0});
+    };
+
+    for (int i = 0; i < HOTBAR_SIZE; i++) {
+        float x0 = startX + i * (slotSizeX + padding);
+        float x1 = x0 + slotSizeX;
+        float y0 = baseY;
+        float y1 = baseY + slotSize;
+
+        // Slot background — dark semi-transparent quad (UV from a solid dark region)
+        // We'll use a tiny corner of the bedrock tile for the dark background
+        TileUV bgUV = getTileUV(TileID::Bedrock);
+        float bgAlpha = (i == hotbarSlot) ? 0.85f : 0.45f;
+        // We can't easily pass per-vertex alpha without changing the vertex format,
+        // so instead draw selected slot slightly larger
+        if (i == hotbarSlot) {
+            float expand = 0.008f / ar;
+            pushQuad(x0 - expand, y0 - expand*ar,
+                     x1 + expand, y1 + expand*ar,
+                     bgUV.u0, bgUV.v0, bgUV.u1, bgUV.v1);
+        } else {
+            pushQuad(x0, y0, x1, y1, bgUV.u0, bgUV.v0, bgUV.u1, bgUV.v1);
+        }
+
+        // Block face — use top face tile
+        BlockType bt = HOTBAR_BLOCKS[i];
+        // Pick representative tile for top face (face index 2 = top)
+        TileID tid;
+        switch (bt) {
+            case BlockType::Grass:   tid = TileID::GrassTop;  break;
+            case BlockType::Dirt:    tid = TileID::Dirt;       break;
+            case BlockType::Stone:   tid = TileID::Stone;      break;
+            case BlockType::Wood:    tid = TileID::WoodTop;    break;
+            case BlockType::Leaves:  tid = TileID::Leaves;     break;
+            case BlockType::Snow:    tid = TileID::Snow;       break;
+            case BlockType::Bedrock: tid = TileID::Bedrock;    break;
+            default:                 tid = TileID::Stone;      break;
+        }
+        TileUV uv = getTileUV(tid);
+        float inset = 0.006f / ar;
+        pushQuad(x0+inset, y0+inset*ar, x1-inset, y1-inset*ar,
+                 uv.u0, uv.v0, uv.u1, uv.v1);
+    }
+
+    // Crosshair — two thin quads forming a + in the center
+    float chSize = 0.025f;
+    float chThick = 0.004f;
+    float chThickX = chThick / ar;
+    // Horizontal bar
+    pushQuad(-chSize, -chThick, chSize, chThick,
+             0.f, 0.f, 0.f, 0.f);  // UV doesn't matter — we'll use a solid color trick
+    // Vertical bar
+    pushQuad(-chThickX, -chSize*ar, chThickX, chSize*ar,
+             0.f, 0.f, 0.f, 0.f);
+
+    uiVertexCount = (uint32_t)(verts.size() / 4);
+
+    VkDeviceSize bufSize = verts.size() * sizeof(float);
+    createBuffer(bufSize,
+                 VK_BUFFER_USAGE_VERTEX_BUFFER_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 uiVertexBuf, uiVertexMem);
+    void* data; vkMapMemory(device, uiVertexMem, 0, bufSize, 0, &data);
+    memcpy(data, verts.data(), (size_t)bufSize);
+    vkUnmapMemory(device, uiVertexMem);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Swapchain recreation
 // ─────────────────────────────────────────────────────────────────────────────
 void App::cleanupSwapchain() {
@@ -1025,6 +1332,7 @@ void App::recreateSwapchain() {
     cleanupSwapchain();
     createSwapchain(); createImageViews(); createDepthResources(); createFramebuffers();
     imgAvailIdx = 0;
+    rebuildUIVertices();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1050,6 +1358,11 @@ void App::cleanup() {
     vkFreeMemory(device, atlasMemory, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
     vkDestroyPipeline(device, pipelineWire, nullptr);
+    vkDestroyPipeline(device, uiPipeline, nullptr);
+    if (uiVertexBuf != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, uiVertexBuf, nullptr);
+        vkFreeMemory(device, uiVertexMem, nullptr);
+    }
     vkDestroyPipelineLayout(device, pipeLayout, nullptr);
     vkDestroyRenderPass(device, renderPass, nullptr);
     for (int i=0; i<MAX_FRAMES; i++) {
