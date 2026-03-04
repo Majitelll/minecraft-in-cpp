@@ -3,9 +3,9 @@
 #define GLFW_INCLUDE_VULKAN
 #include <GLFW/glfw3.h>
 #include <cglm/cglm.h>
+#include <random>
 
 #include "chunkmanager.h"
-
 #include <array>
 #include <optional>
 #include <string>
@@ -59,6 +59,12 @@ private:
     VkDeviceMemory depthMemory = VK_NULL_HANDLE;
     VkImageView    depthView   = VK_NULL_HANDLE;
 
+    // ── texture atlas ─────────────────────────────────────────────────────────
+    VkImage        atlasImage   = VK_NULL_HANDLE;
+    VkDeviceMemory atlasMemory  = VK_NULL_HANDLE;
+    VkImageView    atlasView    = VK_NULL_HANDLE;
+    VkSampler      atlasSampler = VK_NULL_HANDLE;
+
     // ── framebuffers ──────────────────────────────────────────────────────
     std::vector<VkFramebuffer> framebuffers;
 
@@ -86,7 +92,7 @@ private:
     bool framebufferResized = false;
 
     // ── world ─────────────────────────────────────────────────────────────
-    ChunkManager chunkManager{42};
+    ChunkManager chunkManager{static_cast<unsigned int>(std::random_device{}())};
 
     // ── helpers ───────────────────────────────────────────────────────────
     struct QueueFamilies {
@@ -113,6 +119,7 @@ private:
     void createDepthResources();
     void createFramebuffers();
     void createCommandPool();
+    void createTextureAtlas();
     void createUniformBuffers();
     void createDescriptorPool();
     void createDescriptorSets();

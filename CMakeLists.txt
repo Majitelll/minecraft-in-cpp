@@ -47,7 +47,15 @@ add_executable(game
     src/camera.cpp
     src/chunk.cpp
     src/chunkmanager.cpp
+    src/textureatlas.cpp
 )
+
+# ── Windows: hide terminal in Release, keep it in Debug ──────────────────────
+if(WIN32)
+    set_target_properties(game PROPERTIES
+        WIN32_EXECUTABLE $<CONFIG:Release>
+    )
+endif()
 
 target_include_directories(game PRIVATE src)
 target_link_libraries(game PRIVATE Vulkan::Vulkan glfw cglm)

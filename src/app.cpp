@@ -1,5 +1,6 @@
 #include "app.h"
 #include "camera.h"
+#include "textureatlas.h"
 
 #include <algorithm>
 #include <array>
@@ -10,6 +11,9 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+
+// Defined in main.cpp — no-op in Release builds
+void logMsg(const std::string& msg);
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Config
@@ -54,14 +58,47 @@ static std::vector<char> readFile(const std::string& path) {
 // ─────────────────────────────────────────────────────────────────────────────
 // run / mainLoop / drawFrame
 // ─────────────────────────────────────────────────────────────────────────────
+// forward declare the log function from main.cpp
+void logMsg(const std::string& msg);
+
 void App::run() {
+    logMsg("initWindow...");
     initWindow();
+    logMsg("initVulkan...");
     initVulkan();
+    logMsg("seed: " + std::to_string(chunkManager.getSeed()));
+    logMsg("mainLoop...");
     mainLoop();
+    logMsg("cleanup...");
     cleanup();
 }
 
+void App::initVulkan() {
+    logMsg("  createInstance");       createInstance();
+    logMsg("  setupDebugMessenger");  setupDebugMessenger();
+    logMsg("  createSurface");        createSurface();
+    logMsg("  pickPhysicalDevice");   pickPhysicalDevice();
+    logMsg("  createLogicalDevice");  createLogicalDevice();
+    logMsg("  createSwapchain");      createSwapchain();
+    logMsg("  createImageViews");     createImageViews();
+    logMsg("  createRenderPass");     createRenderPass();
+    logMsg("  createDescLayout");     createDescriptorSetLayout();
+    logMsg("  createPipelines");      createGraphicsPipelines();
+    logMsg("  createDepth");          createDepthResources();
+    logMsg("  createFramebuffers");   createFramebuffers();
+    logMsg("  createCommandPool");    createCommandPool();
+    logMsg("  createTextureAtlas");   createTextureAtlas();
+    logMsg("  createUniformBuffers"); createUniformBuffers();
+    logMsg("  createDescPool");       createDescriptorPool();
+    logMsg("  createDescSets");       createDescriptorSets();
+    logMsg("  createCommandBuffers"); createCommandBuffers();
+    logMsg("  createSyncObjects");    createSyncObjects();
+    logMsg("  initVulkan done");
+}
+
 void App::mainLoop() {
+    logMsg("mainLoop: entering loop");
+    int frameCount = 0;
     while (!glfwWindowShouldClose(window)) {
         float now = (float)glfwGetTime();
         deltaTime = now - lastFrame;
@@ -69,12 +106,13 @@ void App::mainLoop() {
         glfwPollEvents();
         processInput(window);
 
-        // Compute which chunk the player is in
         int playerChunkX = (int)floorf(camera.position[0] / (float)CHUNK_SIZE);
         int playerChunkZ = (int)floorf(camera.position[2] / (float)CHUNK_SIZE);
+
+        if (frameCount == 0) logMsg("mainLoop: first chunkManager.update");
         chunkManager.update(playerChunkX, playerChunkZ);
 
-        // Upload up to 4 finished meshes per frame so we don't stall
+        if (frameCount == 0) logMsg("mainLoop: first drainUploadQueue");
         std::vector<UploadRequest> ready;
         chunkManager.drainUploadQueue(ready, 4);
         for (auto& req : ready) {
@@ -84,18 +122,28 @@ void App::mainLoop() {
             }
         }
 
-        // Free GPU buffers for unloaded chunks
+        if (frameCount == 0) logMsg("mainLoop: first drainUnloadQueue");
         for (auto pos : chunkManager.drainUnloadQueue())
             destroyChunkBuffers(pos);
 
+        if (chunkManager.pool.hasError())
+            throw std::runtime_error("Worker thread error: " + chunkManager.pool.getError());
+
+        if (frameCount == 0) logMsg("mainLoop: before drawFrame");
         drawFrame();
+        if (frameCount == 0) logMsg("mainLoop: first frame complete");
+        frameCount++;
     }
     vkDeviceWaitIdle(device);
 }
 
 void App::drawFrame() {
+    static int dfCount = 0;
+    bool log0 = (dfCount == 0);
+    if (log0) logMsg("  drawFrame: waitForFences");
     vkWaitForFences(device, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
 
+    if (log0) logMsg("  drawFrame: acquireNextImage");
     uint32_t imgIdx;
     VkResult res = vkAcquireNextImageKHR(device, swapchain, UINT64_MAX,
                                           imgAvail[imgAvailIdx],
@@ -104,11 +152,13 @@ void App::drawFrame() {
     else if (res != VK_SUCCESS && res != VK_SUBOPTIMAL_KHR)
         throw std::runtime_error("vkAcquireNextImageKHR failed");
 
+    if (log0) logMsg("  drawFrame: resetFences + recordCommandBuffer");
     vkResetFences(device, 1, &inFlight[currentFrame]);
     vkResetCommandBuffer(cmdBufs[currentFrame], 0);
     updateUniformBuffer(currentFrame);
     recordCommandBuffer(cmdBufs[currentFrame], imgIdx);
 
+    if (log0) logMsg("  drawFrame: queueSubmit");
     VkPipelineStageFlags waitStage = VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
     VkSubmitInfo si{};
     si.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
@@ -122,6 +172,7 @@ void App::drawFrame() {
     if (vkQueueSubmit(graphicsQueue, 1, &si, inFlight[currentFrame]) != VK_SUCCESS)
         throw std::runtime_error("vkQueueSubmit failed");
 
+    if (log0) logMsg("  drawFrame: queuePresent");
     VkPresentInfoKHR pi{};
     pi.sType              = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
     pi.waitSemaphoreCount = 1;
@@ -133,15 +184,17 @@ void App::drawFrame() {
     if (res == VK_ERROR_OUT_OF_DATE_KHR || res == VK_SUBOPTIMAL_KHR || framebufferResized) {
         framebufferResized = false; recreateSwapchain();
     }
+    if (log0) logMsg("  drawFrame: done");
     currentFrame = (currentFrame + 1) % MAX_FRAMES;
     imgAvailIdx  = (imgAvailIdx  + 1) % (uint32_t)scImages.size();
+    dfCount++;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Chunk GPU management
 // ─────────────────────────────────────────────────────────────────────────────
 void App::uploadChunkMesh(const UploadRequest& req) {
-    // Destroy any existing buffer for this chunk (re-meshing)
+    logMsg("uploadChunkMesh: (" + std::to_string(req.pos.x) + "," + std::to_string(req.pos.z) + ") verts=" + std::to_string(req.vertices.size()));
     destroyChunkBuffers(req.pos);
 
     VkDeviceSize bufSize = req.vertices.size() * sizeof(float);
@@ -162,7 +215,7 @@ void App::uploadChunkMesh(const UploadRequest& req) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  cb.vertexBuffer, cb.vertexMemory);
     copyBuffer(stageBuf, cb.vertexBuffer, bufSize);
-    cb.vertexCount = (uint32_t)(req.vertices.size() / 6);
+    cb.vertexCount = (uint32_t)(req.vertices.size() / 5);
 
     vkDestroyBuffer(device, stageBuf, nullptr);
     vkFreeMemory(device, stageMem, nullptr);
@@ -173,7 +226,8 @@ void App::uploadChunkMesh(const UploadRequest& req) {
 void App::destroyChunkBuffers(ChunkPos pos) {
     auto it = chunkBuffers.find(pos);
     if (it == chunkBuffers.end()) return;
-    vkDeviceWaitIdle(device); // safe since this is on main thread
+    logMsg("destroyChunkBuffers: (" + std::to_string(pos.x) + "," + std::to_string(pos.z) + ")");
+    vkDeviceWaitIdle(device);
     vkDestroyBuffer(device, it->second.vertexBuffer, nullptr);
     vkFreeMemory(device, it->second.vertexMemory, nullptr);
     chunkBuffers.erase(it);
@@ -198,27 +252,6 @@ void App::initWindow() {
 // ─────────────────────────────────────────────────────────────────────────────
 // Vulkan init
 // ─────────────────────────────────────────────────────────────────────────────
-void App::initVulkan() {
-    createInstance();
-    setupDebugMessenger();
-    createSurface();
-    pickPhysicalDevice();
-    createLogicalDevice();
-    createSwapchain();
-    createImageViews();
-    createRenderPass();
-    createDescriptorSetLayout();
-    createGraphicsPipelines();
-    createDepthResources();
-    createFramebuffers();
-    createCommandPool();
-    createUniformBuffers();
-    createDescriptorPool();
-    createDescriptorSets();
-    createCommandBuffers();
-    createSyncObjects();
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // Instance — macOS / MoltenVK portability
 // ─────────────────────────────────────────────────────────────────────────────
@@ -527,12 +560,23 @@ void App::createRenderPass() {
 // Descriptor layout
 // ─────────────────────────────────────────────────────────────────────────────
 void App::createDescriptorSetLayout() {
-    VkDescriptorSetLayoutBinding b{};
-    b.binding = 0; b.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-    b.descriptorCount = 1; b.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    VkDescriptorSetLayoutBinding uboBinding{};
+    uboBinding.binding         = 0;
+    uboBinding.descriptorType  = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboBinding.descriptorCount = 1;
+    uboBinding.stageFlags      = VK_SHADER_STAGE_VERTEX_BIT;
+
+    VkDescriptorSetLayoutBinding samplerBinding{};
+    samplerBinding.binding         = 1;
+    samplerBinding.descriptorType  = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+    samplerBinding.descriptorCount = 1;
+    samplerBinding.stageFlags      = VK_SHADER_STAGE_FRAGMENT_BIT;
+
+    std::array<VkDescriptorSetLayoutBinding,2> bindings = {uboBinding, samplerBinding};
     VkDescriptorSetLayoutCreateInfo ci{};
-    ci.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    ci.bindingCount = 1; ci.pBindings = &b;
+    ci.sType        = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    ci.bindingCount = (uint32_t)bindings.size();
+    ci.pBindings    = bindings.data();
     if (vkCreateDescriptorSetLayout(device, &ci, nullptr, &descLayout) != VK_SUCCESS)
         throw std::runtime_error("vkCreateDescriptorSetLayout failed");
 }
@@ -560,11 +604,11 @@ void App::createGraphicsPipelines() {
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,   vertMod, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main", nullptr};
 
-    // Vertex format: xyz rgb (6 floats per vertex)
-    VkVertexInputBindingDescription bind{0, 6*sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    // Vertex format: xyz uv (5 floats per vertex)
+    VkVertexInputBindingDescription bind{0, 5*sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
     VkVertexInputAttributeDescription attrs[2] = {
         {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
-        {1, 0, VK_FORMAT_R32G32B32_SFLOAT, 3*sizeof(float)}
+        {1, 0, VK_FORMAT_R32G32_SFLOAT,    3*sizeof(float)}
     };
     VkPipelineVertexInputStateCreateInfo vis{};
     vis.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
@@ -648,6 +692,112 @@ void App::createImage(uint32_t w, uint32_t h, VkFormat fmt, VkImageUsageFlags us
         throw std::runtime_error("vkAllocateMemory (image) failed");
     vkBindImageMemory(device, img, mem, 0);
 }
+// ─────────────────────────────────────────────────────────────────────────────
+// Texture Atlas
+// ─────────────────────────────────────────────────────────────────────────────
+static void transitionImageLayout(VkDevice device, VkCommandPool pool,
+                                   VkQueue queue, VkImage image,
+                                   VkImageLayout oldLayout, VkImageLayout newLayout) {
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandPool = pool; ai.commandBufferCount = 1;
+    VkCommandBuffer cb; vkAllocateCommandBuffers(device, &ai, &cb);
+    VkCommandBufferBeginInfo bi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    bi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &bi);
+
+    VkImageMemoryBarrier barrier{VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER};
+    barrier.oldLayout = oldLayout; barrier.newLayout = newLayout;
+    barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+    barrier.image = image;
+    barrier.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+
+    VkPipelineStageFlags srcStage, dstStage;
+    if (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED &&
+        newLayout == VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL) {
+        barrier.srcAccessMask = 0;
+        barrier.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        srcStage = VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT;
+        dstStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+    } else {
+        barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+        barrier.dstAccessMask = VK_ACCESS_SHADER_READ_BIT;
+        srcStage = VK_PIPELINE_STAGE_TRANSFER_BIT;
+        dstStage = VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT;
+    }
+    vkCmdPipelineBarrier(cb, srcStage, dstStage, 0, 0, nullptr, 0, nullptr, 1, &barrier);
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+    vkQueueSubmit(queue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(queue);
+    vkFreeCommandBuffers(device, pool, 1, &cb);
+}
+
+void App::createTextureAtlas() {
+    auto pixels = generateAtlas(); // RGBA8 pixel data
+    VkDeviceSize imgSize = ATLAS_W * ATLAS_H * 4;
+
+    // Staging buffer
+    VkBuffer stageBuf; VkDeviceMemory stageMem;
+    createBuffer(imgSize, VK_BUFFER_USAGE_TRANSFER_SRC_BIT,
+                 VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                 stageBuf, stageMem);
+    void* data; vkMapMemory(device, stageMem, 0, imgSize, 0, &data);
+    memcpy(data, pixels.data(), (size_t)imgSize);
+    vkUnmapMemory(device, stageMem);
+
+    // Create image
+    createImage(ATLAS_W, ATLAS_H, VK_FORMAT_R8G8B8A8_SRGB,
+                VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT,
+                atlasImage, atlasMemory);
+
+    // Transition + copy
+    transitionImageLayout(device, cmdPool, graphicsQueue, atlasImage,
+                          VK_IMAGE_LAYOUT_UNDEFINED,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+
+    VkCommandBufferAllocateInfo ai{VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO};
+    ai.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY; ai.commandPool = cmdPool; ai.commandBufferCount = 1;
+    VkCommandBuffer cb; vkAllocateCommandBuffers(device, &ai, &cb);
+    VkCommandBufferBeginInfo begi{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};
+    begi.flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
+    vkBeginCommandBuffer(cb, &begi);
+    VkBufferImageCopy region{};
+    region.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+    region.imageExtent      = {(uint32_t)ATLAS_W, (uint32_t)ATLAS_H, 1};
+    vkCmdCopyBufferToImage(cb, stageBuf, atlasImage,
+                           VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+    vkEndCommandBuffer(cb);
+    VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
+    si.commandBufferCount = 1; si.pCommandBuffers = &cb;
+    vkQueueSubmit(graphicsQueue, 1, &si, VK_NULL_HANDLE);
+    vkQueueWaitIdle(graphicsQueue);
+    vkFreeCommandBuffers(device, cmdPool, 1, &cb);
+
+    transitionImageLayout(device, cmdPool, graphicsQueue, atlasImage,
+                          VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                          VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+
+    vkDestroyBuffer(device, stageBuf, nullptr);
+    vkFreeMemory(device, stageMem, nullptr);
+
+    // Image view
+    atlasView = makeImageView(atlasImage, VK_FORMAT_R8G8B8A8_SRGB, VK_IMAGE_ASPECT_COLOR_BIT);
+
+    // Sampler — nearest filter for pixel art look
+    VkSamplerCreateInfo sci{VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO};
+    sci.magFilter  = VK_FILTER_NEAREST;
+    sci.minFilter  = VK_FILTER_NEAREST;
+    sci.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    sci.addressModeU = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeV = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.addressModeW = VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
+    sci.maxLod = 0.f;
+    if (vkCreateSampler(device, &sci, nullptr, &atlasSampler) != VK_SUCCESS)
+        throw std::runtime_error("vkCreateSampler failed");
+}
+
 void App::createDepthResources() {
     createImage(scExtent.width, scExtent.height, VK_FORMAT_D32_SFLOAT,
                 VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT, depthImage, depthMemory);
@@ -738,7 +888,7 @@ void App::updateUniformBuffer(uint32_t frame) {
     mat4 view; glm_lookat(camera.position, center, up, view);
     mat4 proj; glm_perspective(glm_rad(70.f),
                                (float)scExtent.width/(float)scExtent.height,
-                               0.1f, 1000.f, proj);
+                               0.1f, 2000.f, proj);
     proj[1][1] *= -1;
     UBO ubo{}; glm_mat4_mul(proj, view, ubo.mvp);
     memcpy(uboMapped[frame], &ubo, sizeof(ubo));
@@ -748,9 +898,13 @@ void App::updateUniformBuffer(uint32_t frame) {
 // Descriptor pool & sets
 // ─────────────────────────────────────────────────────────────────────────────
 void App::createDescriptorPool() {
-    VkDescriptorPoolSize ps{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, (uint32_t)MAX_FRAMES};
+    std::array<VkDescriptorPoolSize,2> sizes{};
+    sizes[0] = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,          (uint32_t)MAX_FRAMES};
+    sizes[1] = {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,  (uint32_t)MAX_FRAMES};
     VkDescriptorPoolCreateInfo ci{VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO};
-    ci.poolSizeCount = 1; ci.pPoolSizes = &ps; ci.maxSets = (uint32_t)MAX_FRAMES;
+    ci.poolSizeCount = (uint32_t)sizes.size();
+    ci.pPoolSizes    = sizes.data();
+    ci.maxSets       = (uint32_t)MAX_FRAMES;
     if (vkCreateDescriptorPool(device, &ci, nullptr, &descPool) != VK_SUCCESS)
         throw std::runtime_error("vkCreateDescriptorPool failed");
 }
@@ -764,11 +918,22 @@ void App::createDescriptorSets() {
         throw std::runtime_error("vkAllocateDescriptorSets failed");
     for (int i=0; i<MAX_FRAMES; i++) {
         VkDescriptorBufferInfo bi{ubos[i], 0, sizeof(UBO)};
-        VkWriteDescriptorSet w{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
-        w.dstSet = descSets[i]; w.dstBinding = 0;
-        w.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
-        w.descriptorCount = 1; w.pBufferInfo = &bi;
-        vkUpdateDescriptorSets(device, 1, &w, 0, nullptr);
+        VkWriteDescriptorSet wUBO{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        wUBO.dstSet = descSets[i]; wUBO.dstBinding = 0;
+        wUBO.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+        wUBO.descriptorCount = 1; wUBO.pBufferInfo = &bi;
+
+        VkDescriptorImageInfo ii{};
+        ii.imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        ii.imageView   = atlasView;
+        ii.sampler     = atlasSampler;
+        VkWriteDescriptorSet wSampler{VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET};
+        wSampler.dstSet = descSets[i]; wSampler.dstBinding = 1;
+        wSampler.descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        wSampler.descriptorCount = 1; wSampler.pImageInfo = &ii;
+
+        std::array<VkWriteDescriptorSet,2> writes = {wUBO, wSampler};
+        vkUpdateDescriptorSets(device, (uint32_t)writes.size(), writes.data(), 0, nullptr);
     }
 }
 
@@ -878,6 +1043,11 @@ void App::cleanup() {
     }
     vkDestroyDescriptorPool(device, descPool, nullptr);
     vkDestroyDescriptorSetLayout(device, descLayout, nullptr);
+    // Atlas
+    vkDestroySampler(device, atlasSampler, nullptr);
+    vkDestroyImageView(device, atlasView, nullptr);
+    vkDestroyImage(device, atlasImage, nullptr);
+    vkFreeMemory(device, atlasMemory, nullptr);
     vkDestroyPipeline(device, pipeline, nullptr);
     vkDestroyPipeline(device, pipelineWire, nullptr);
     vkDestroyPipelineLayout(device, pipeLayout, nullptr);
