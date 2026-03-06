@@ -32,7 +32,9 @@ static RGBA blend(RGBA base, RGBA over, uint8_t amt) {
 // Simple LCG noise for pixel variation
 static uint32_t lcg(uint32_t s) { return s*1664525u+1013904223u; }
 static float pnoise(int x, int y, int seed=0) {
-    uint32_t s = lcg((uint32_t)(x*73856093^y*19349663^seed));
+    // Use unsigned arithmetic to avoid signed-integer-overflow UB (callers
+    // pass values like x*2 which can exceed INT_MAX at TILE_SIZE-1).
+    uint32_t s = lcg((uint32_t)x*73856093u ^ (uint32_t)y*19349663u ^ (uint32_t)seed);
     return (float)(s&0xFF)/255.f;
 }
 

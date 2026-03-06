@@ -187,7 +187,17 @@ void ChunkManager::scheduleDecoration(ChunkPos pos) {
             return it->second.get();
         };
 
-        myChunk->generateDecorations(pos.x, pos.z, seed, neighborFn);
+        {
+            // Hold decoMtx for the entire generateDecorations call.
+            // Decoration workers write leaves into *neighbor* chunks via
+            // neighborFn, so two adjacent decoration tasks running in parallel
+            // would race on the same blocks[] array — undefined behaviour that
+            // reliably crashes on Linux/macOS Release builds.  Serialising the
+            // write phase here is the simplest correct fix; terrain generation
+            // and mesh building remain fully parallel.
+            std::unique_lock<std::mutex> decoLock(decoMtx);
+            myChunk->generateDecorations(pos.x, pos.z, seed, neighborFn);
+        }
 
         {
             std::unique_lock<std::mutex> lock(mapMtx);

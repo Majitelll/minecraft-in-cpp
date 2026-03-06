@@ -508,7 +508,13 @@ bool App::deviceSuitable(VkPhysicalDevice dev) {
     uint32_t fmtN, pmN;
     vkGetPhysicalDeviceSurfaceFormatsKHR(dev, surface, &fmtN, nullptr);
     vkGetPhysicalDeviceSurfacePresentModesKHR(dev, surface, &pmN, nullptr);
-    return fmtN > 0 && pmN > 0;
+    if (fmtN == 0 || pmN == 0) return false;
+
+    // The wireframe pipeline requires fillModeNonSolid; reject devices that
+    // don't support it rather than letting vkCreateDevice fail later.
+    VkPhysicalDeviceFeatures feats{};
+    vkGetPhysicalDeviceFeatures(dev, &feats);
+    return feats.fillModeNonSolid == VK_TRUE;
 }
 
 void App::pickPhysicalDevice() {

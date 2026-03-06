@@ -60,6 +60,10 @@ private:
     std::unordered_map<ChunkPos, ChunkStatus,         ChunkPosHash> chunkStatus;
     std::unordered_map<ChunkPos, std::unique_ptr<Chunk>, ChunkPosHash> chunkData;
 
+    // Serialises decoration writes: adjacent decoration workers share neighbor
+    // chunks and would data-race on blocks[] without this mutex.
+    std::mutex decoMtx;
+
     std::mutex                uploadMtx;
     std::queue<UploadRequest> uploadQueue;
 
