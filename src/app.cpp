@@ -351,7 +351,7 @@ void App::uploadChunkMesh(const UploadRequest& req) {
                  VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
                  cb.vertexBuffer, cb.vertexMemory);
     copyBuffer(stageBuf, cb.vertexBuffer, bufSize);
-    cb.vertexCount = (uint32_t)(req.vertices.size() / 5);
+    cb.vertexCount = (uint32_t)(req.vertices.size() / 6);
 
     vkDestroyBuffer(device, stageBuf, nullptr);
     vkFreeMemory(device, stageMem, nullptr);
@@ -754,16 +754,17 @@ void App::createGraphicsPipelines() {
     stages[0] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_VERTEX_BIT,   vertMod, "main", nullptr};
     stages[1] = {VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, nullptr, 0, VK_SHADER_STAGE_FRAGMENT_BIT, fragMod, "main", nullptr};
 
-    // Vertex format: xyz uv (5 floats per vertex)
-    VkVertexInputBindingDescription bind{0, 5*sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
-    VkVertexInputAttributeDescription attrs[2] = {
-        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},
-        {1, 0, VK_FORMAT_R32G32_SFLOAT,    3*sizeof(float)}
+    // Vertex format: xyz uvRaw tileBaseU (6 floats per vertex)
+    VkVertexInputBindingDescription bind{0, 6*sizeof(float), VK_VERTEX_INPUT_RATE_VERTEX};
+    VkVertexInputAttributeDescription attrs[3] = {
+        {0, 0, VK_FORMAT_R32G32B32_SFLOAT, 0},               // pos
+        {1, 0, VK_FORMAT_R32G32_SFLOAT,    3*sizeof(float)},  // uvRaw
+        {2, 0, VK_FORMAT_R32_SFLOAT,       5*sizeof(float)},  // tileBaseU
     };
     VkPipelineVertexInputStateCreateInfo vis{};
     vis.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
     vis.vertexBindingDescriptionCount = 1; vis.pVertexBindingDescriptions = &bind;
-    vis.vertexAttributeDescriptionCount = 2; vis.pVertexAttributeDescriptions = attrs;
+    vis.vertexAttributeDescriptionCount = 3; vis.pVertexAttributeDescriptions = attrs;
 
     VkPipelineInputAssemblyStateCreateInfo ias{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};
     ias.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;

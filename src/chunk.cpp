@@ -121,35 +121,26 @@ static TileID blockTile(BlockType type, int face) {
     }
 }
 
-// Per-face UV coords (u,v pairs for 6 vertices of a quad)
-// Matches the winding order in kFaceVerts
-static const float kFaceUVs[6][12] = {
-    // +X
-    {1,1, 1,0, 0,0, 0,0, 0,1, 1,1},
-    // -X
-    {1,1, 1,0, 0,0, 0,0, 0,1, 1,1},
-    // +Y (top)
-    {0,0, 0,1, 1,1, 1,1, 1,0, 0,0},
-    // -Y (bottom)
-    {0,1, 0,0, 1,0, 1,0, 1,1, 0,1},
-    // +Z
-    {0,1, 1,1, 1,0, 1,0, 0,0, 0,1},
-    // -Z
-    {1,1, 0,1, 0,0, 0,0, 1,0, 1,1},
-};
+// ─────────────────────────────────────────────────────────────────────────────
+// Greedy meshing axis tables
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-face: slice axis, u axis, v axis, face plane offset (0 or 1), normal sign
+static const int GM_SA[6] = {0, 0, 1, 1, 2, 2};
+static const int GM_UA[6] = {2, 2, 0, 0, 0, 0};
+static const int GM_VA[6] = {1, 1, 2, 2, 1, 1};
+static const int GM_PO[6] = {1, 0, 1, 0, 1, 0};  // plane coord = s + PO
+static const int GM_NS[6] = {1,-1, 1,-1, 1,-1};   // neighbor direction along slice axis
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Face geometry
-// ─────────────────────────────────────────────────────────────────────────────
-static const float kFaceVerts[6][18] = {
-    { 1.0f, 0.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f,  1.0f, 0.0f, 1.0f,  1.0f, 0.0f, 0.0f},
-    { 0.0f, 0.0f, 1.0f,  0.0f, 1.0f, 1.0f,  0.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 0.0f, 0.0f,  0.0f, 0.0f, 1.0f},
-    { 0.0f, 1.0f, 0.0f,  0.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f},
-    { 0.0f, 0.0f, 1.0f,  0.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 0.0f,  1.0f, 0.0f, 1.0f,  0.0f, 0.0f, 1.0f},
-    { 0.0f, 0.0f, 1.0f,  1.0f, 0.0f, 1.0f,  1.0f, 1.0f, 1.0f,  1.0f, 1.0f, 1.0f,  0.0f, 1.0f, 1.0f,  0.0f, 0.0f, 1.0f},
-    { 1.0f, 0.0f, 0.0f,  0.0f, 0.0f, 0.0f,  0.0f, 1.0f, 0.0f,  0.0f, 1.0f, 0.0f,  1.0f, 1.0f, 0.0f,  1.0f, 0.0f, 0.0f}
+// (ul_is_full, vl_is_full) for each of 6 vertices — matched to original kFaceVerts winding
+// 0 = use 0, 1 = use uw or vw
+static const int GM_UVP[6][6][2] = {
+    {{0,0},{0,1},{1,1},{1,1},{1,0},{0,0}},  // +X
+    {{1,0},{1,1},{0,1},{0,1},{0,0},{1,0}},  // -X
+    {{0,0},{0,1},{1,1},{1,1},{1,0},{0,0}},  // +Y
+    {{0,1},{0,0},{1,0},{1,0},{1,1},{0,1}},  // -Y
+    {{0,0},{1,0},{1,1},{1,1},{0,1},{0,0}},  // +Z
+    {{1,0},{0,0},{0,1},{0,1},{1,1},{1,0}},  // -Z
 };
-static const int kNeighbors[6][3]={{1,0,0},{-1,0,0},{0,1,0},{0,-1,0},{0,0,1},{0,0,-1}};
 
 // ─────────────────────────────────────────────────────────────────────────────
 bool Chunk::isSolid(int x, int y, int z) const {
@@ -323,29 +314,84 @@ std::vector<float> Chunk::buildMesh(int chunkX, int chunkZ, Chunk* neighbors[3][
     float offX = (float)(chunkX * CHUNK_SIZE);
     float offZ = (float)(chunkZ * CHUNK_SIZE);
 
-    for (int x=0; x<CHUNK_SIZE; x++) {
-        for (int y=0; y<CHUNK_HEIGHT; y++) {
-            for (int z=0; z<CHUNK_SIZE; z++) {
-                BlockType bt = blocks[x][y][z];
-                if (bt == BlockType::Air) continue;
-                for (int f=0; f<6; f++) {
-                    int nx = x + kNeighbors[f][0];
-                    int ny = y + kNeighbors[f][1];
-                    int nz = z + kNeighbors[f][2];
-                    // Use world-aware solid check so chunk borders are culled too
-                    if (isSolidWorld(nx, ny, nz, neighbors)) continue;
-                    TileUV uv = getTileUV(blockTile(bt, f));
-                    for (int v=0; v<6; v++) {
-                        // Position
-                        verts.push_back(kFaceVerts[f][v*3+0] + (float)x + offX);
-                        verts.push_back(kFaceVerts[f][v*3+1] + (float)y);
-                        verts.push_back(kFaceVerts[f][v*3+2] + (float)z + offZ);
-                        // UV — lerp within tile rect
-                        float fu = kFaceUVs[f][v*2+0];
-                        float fv = kFaceUVs[f][v*2+1];
-                        verts.push_back(uv.u0 + fu*(uv.u1-uv.u0));
-                        verts.push_back(uv.v0 + fv*(uv.v1-uv.v0));
+    // Chunk dimensions indexed by axis: 0=X, 1=Y, 2=Z
+    static const int DIMS[3] = {CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE};
+
+    // Greedy merge mask: [u][v], max uDim=CHUNK_SIZE=16, max vDim=CHUNK_HEIGHT=64
+    // -1 = empty or already processed; otherwise stores TileID
+    int16_t mask[CHUNK_SIZE][CHUNK_HEIGHT];
+
+    for (int f = 0; f < 6; f++) {
+        const int sa    = GM_SA[f];
+        const int ua    = GM_UA[f];
+        const int va    = GM_VA[f];
+        const int sliceDim = DIMS[sa];
+        const int uDim     = DIMS[ua];
+        const int vDim     = DIMS[va];
+
+        for (int s = 0; s < sliceDim; s++) {
+            // ── Build face mask ────────────────────────────────────────────
+            for (int u = 0; u < uDim; u++) {
+                for (int v = 0; v < vDim; v++) {
+                    int c[3];
+                    c[sa] = s; c[ua] = u; c[va] = v;
+                    if (blocks[c[0]][c[1]][c[2]] == BlockType::Air) {
+                        mask[u][v] = -1;
+                        continue;
                     }
+                    int nc[3] = {c[0], c[1], c[2]};
+                    nc[sa] += GM_NS[f];
+                    mask[u][v] = isSolidWorld(nc[0], nc[1], nc[2], neighbors)
+                                 ? -1
+                                 : (int16_t)blockTile(blocks[c[0]][c[1]][c[2]], f);
+                }
+            }
+
+            // ── Greedy merge ───────────────────────────────────────────────
+            for (int u = 0; u < uDim; u++) {
+                for (int v = 0; v < vDim; ) {
+                    if (mask[u][v] < 0) { v++; continue; }
+                    const int16_t tileID = mask[u][v];
+
+                    // Extend in v direction within current column u
+                    int vw = 1;
+                    while (v + vw < vDim && mask[u][v + vw] == tileID) vw++;
+
+                    // Extend in u direction, requiring all rows v..v+vw-1 to match
+                    int uw = 1;
+                    bool ok = true;
+                    while (u + uw < uDim && ok) {
+                        for (int dv = 0; dv < vw; dv++) {
+                            if (mask[u + uw][v + dv] != tileID) { ok = false; break; }
+                        }
+                        if (ok) uw++;
+                    }
+
+                    // Mark merged cells as processed
+                    for (int du = 0; du < uw; du++)
+                        for (int dv = 0; dv < vw; dv++)
+                            mask[u + du][v + dv] = -1;
+
+                    // Emit merged quad — 6 vertices, 6 floats each (x,y,z, uRaw,vRaw, tileBaseU)
+                    // uRaw/vRaw go 0..uw/vw so the fragment shader can tile with fract()
+                    const float tileBaseU = (float)(int)tileID / (float)ATLAS_COLS;
+                    const int   planeCoord = s + GM_PO[f];
+
+                    for (int vi = 0; vi < 6; vi++) {
+                        const int ul = GM_UVP[f][vi][0] ? uw : 0;
+                        const int vl = GM_UVP[f][vi][1] ? vw : 0;
+                        int c2[3];
+                        c2[sa] = planeCoord;
+                        c2[ua] = u + ul;
+                        c2[va] = v + vl;
+                        verts.push_back((float)c2[0] + offX);
+                        verts.push_back((float)c2[1]);
+                        verts.push_back((float)c2[2] + offZ);
+                        verts.push_back((float)ul);   // uRaw: 0..uw
+                        verts.push_back((float)vl);   // vRaw: 0..vw
+                        verts.push_back(tileBaseU);
+                    }
+                    v += vw;
                 }
             }
         }
