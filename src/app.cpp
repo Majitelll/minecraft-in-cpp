@@ -119,6 +119,19 @@ void App::mainLoop() {
         glfwPollEvents();
         processInput(window);
 
+        // Physics: gravity, jumping, AABB collision with world blocks
+        applyPhysics(deltaTime, [&](int wx, int wy, int wz) -> bool {
+            if (wy < 0) return true;          // below world = solid floor
+            if (wy >= CHUNK_HEIGHT) return false; // above world = air
+            int cx = (int)floorf((float)wx / (float)CHUNK_SIZE);
+            int cz = (int)floorf((float)wz / (float)CHUNK_SIZE);
+            int lx = wx - cx * CHUNK_SIZE;
+            int lz = wz - cz * CHUNK_SIZE;
+            Chunk* chunk = chunkManager.getChunk(cx, cz);
+            if (!chunk) return false;
+            return chunk->isSolid(lx, wy, lz);
+        });
+
         // ── Hotbar key selection (1-7) ────────────────────────────────────
         static const int hotbarKeys[7] = {
             GLFW_KEY_1, GLFW_KEY_2, GLFW_KEY_3, GLFW_KEY_4,
