@@ -3,7 +3,6 @@ name: Build
 on:
   push:
     branches: [master]
-    tags: ["v*"]
 
 jobs:
   # ── Web (Emscripten → GitHub Pages) ─────────────────────────────────────────
@@ -53,7 +52,6 @@ jobs:
 
   # ── Windows ─────────────────────────────────────────────────────────────────
   build-windows:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -88,7 +86,6 @@ jobs:
 
   # ── Linux ────────────────────────────────────────────────────────────────────
   build-linux:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -105,7 +102,6 @@ jobs:
             libwayland-dev wayland-protocols libxkbcommon-dev
 
       - name: Configure CMake
-        # Force X11 only — avoids needing wayland-scanner which isn't in PATH
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DGLFW_BUILD_WAYLAND=OFF
 
       - name: Build
@@ -125,7 +121,6 @@ jobs:
 
   # ── macOS ────────────────────────────────────────────────────────────────────
   build-macos:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -134,9 +129,7 @@ jobs:
 
       - name: Install Vulkan SDK + MoltenVK
         run: |
-          # shaderc provides glslc, molten-vk provides the Vulkan ICD on macOS
           brew install vulkan-headers molten-vk shaderc
-          # Add shaderc's glslc to PATH
           echo "$(brew --prefix shaderc)/bin" >> $GITHUB_PATH
 
       - name: Configure CMake
@@ -163,7 +156,6 @@ jobs:
 
   # ── Linux ARM64 ──────────────────────────────────────────────────────────────
   build-linux-arm64:
-    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
@@ -197,31 +189,44 @@ jobs:
           name: linux-arm64
           path: linux-arm64.zip
 
-  # ── Release ──────────────────────────────────────────────────────────────────
-  release:
-    if: startsWith(github.ref, 'refs/tags/')
-    needs: [build-windows, build-linux, build-linux-arm64, build-macos]
+  # ── Tag (conventional commits → semver) ──────────────────────────────────────
+  tag:
+    needs: [build-windows, build-linux, build-linux-arm64, build-macos, build-web]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+    outputs:
+      new_tag: ${{ steps.bump.outputs.new_tag }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
+      - name: Bump version and push tag
+        id: bump
+        uses: mathieudutour/github-tag-action@v6.2
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          default_bump: patch
+          # feat:  → minor,  fix:/perf:/refactor: → patch
+          # feat!: or "BREAKING CHANGE" in body  → major
+
+  # ── Release ──────────────────────────────────────────────────────────────────
+  release:
+    needs: tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-
-      - name: Create tag (if needed)
-        run: |
-          git config user.name  "github-actions"
-          git config user.email "github-actions@github.com"
-          git tag ${{ github.ref_name }} || true
-          git push origin ${{ github.ref_name }} || true
+          # exclude the github-pages artifact
+          pattern: "!github-pages"
 
       - uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.tag.outputs.new_tag }}
           files: |
             artifacts/windows-x86_64/windows-x86_64.zip
             artifacts/linux-x86_64/linux-x86_64.zip
