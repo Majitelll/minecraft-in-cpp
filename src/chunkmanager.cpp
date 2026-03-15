@@ -6,10 +6,16 @@ void logMsg(const std::string& msg);
 
 ChunkManager::ChunkManager(unsigned int seed)
     : seed(seed)
+#ifdef __EMSCRIPTEN__
+    , pool(0)
+{
+    logMsg("ChunkManager: seed=" + std::to_string(seed) + " threads=0 (single-threaded web build)");
+#else
     , pool(std::max(2u, std::thread::hardware_concurrency() - 1))
 {
     logMsg("ChunkManager: seed=" + std::to_string(seed) +
            " threads=" + std::to_string(std::max(2u, std::thread::hardware_concurrency() - 1)));
+#endif
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -24,17 +30,37 @@ void ChunkManager::update(int playerChunkX, int playerChunkZ) {
         }
     }
 
+    // Collect and sort new chunks nearest-first so close chunks always load first
+    std::vector<ChunkPos> toSchedule;
+    for (auto& [pos, _] : desired) {
+        if (chunkStatus.find(pos) == chunkStatus.end())
+            toSchedule.push_back(pos);
+    }
+    std::sort(toSchedule.begin(), toSchedule.end(), [&](const ChunkPos& a, const ChunkPos& b) {
+        int da = (a.x-playerChunkX)*(a.x-playerChunkX) + (a.z-playerChunkZ)*(a.z-playerChunkZ);
+        int db = (b.x-playerChunkX)*(b.x-playerChunkX) + (b.z-playerChunkZ)*(b.z-playerChunkZ);
+        return da < db;
+    });
+
     std::unique_lock<std::mutex> lock(mapMtx);
 
     // ── Schedule terrain for new chunks ──────────────────────────────────────
-    for (auto& [pos, _] : desired) {
-        if (chunkStatus.find(pos) == chunkStatus.end()) {
-            chunkStatus[pos] = ChunkStatus::TerrainPending;
-            chunkData[pos]   = std::make_unique<Chunk>();
-            lock.unlock();
-            scheduleTerrainGen(pos);
-            lock.lock();
-        }
+#ifdef __EMSCRIPTEN__
+    // On web, chunk gen runs synchronously on the main thread.
+    // Only schedule one new chunk per update() to avoid blocking a whole frame.
+    int newChunksThisFrame = 0;
+#endif
+    for (auto& pos : toSchedule) {
+        if (chunkStatus.find(pos) != chunkStatus.end()) continue; // already known
+#ifdef __EMSCRIPTEN__
+        if (newChunksThisFrame >= 1) break;
+        newChunksThisFrame++;
+#endif
+        chunkStatus[pos] = ChunkStatus::TerrainPending;
+        chunkData[pos]   = std::make_unique<Chunk>();
+        lock.unlock();
+        scheduleTerrainGen(pos);
+        lock.lock();
     }
 
     // ── Advance TerrainDone → DecorationPending ───────────────────────────────

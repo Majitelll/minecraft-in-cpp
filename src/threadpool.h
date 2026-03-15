@@ -1,12 +1,37 @@
 #pragma once
 
-#include <condition_variable>
 #include <functional>
+#include <string>
+
+#ifdef __EMSCRIPTEN__
+// Single-threaded stub for Emscripten/GitHub Pages (no SharedArrayBuffer needed).
+// Tasks run synchronously on the calling thread inside enqueue().
+class ThreadPool {
+public:
+    explicit ThreadPool(size_t) {}
+    ~ThreadPool() = default;
+
+    void enqueue(std::function<void()> task) {
+        try { task(); }
+        catch (const std::exception& e) { lastError = e.what(); }
+        catch (...) { lastError = "unknown exception in task"; }
+    }
+
+    bool hasError() const { return !lastError.empty(); }
+    std::string getError() const { return lastError; }
+    size_t queueSize() { return 0; }
+
+private:
+    std::string lastError;
+};
+
+#else
+// Multi-threaded implementation for desktop builds.
+#include <condition_variable>
 #include <future>
 #include <mutex>
 #include <queue>
 #include <stdexcept>
-#include <string>
 #include <thread>
 #include <vector>
 
@@ -75,3 +100,5 @@ private:
     mutable std::mutex errMtx;
     std::string        lastError;
 };
+
+#endif // __EMSCRIPTEN__

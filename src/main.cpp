@@ -1,4 +1,5 @@
 #include "app.h"
+#include "log.h"
 #include <cstdlib>
 #include <iostream>
 #include <fstream>
@@ -50,7 +51,7 @@ int main() {
 }
 
 // Windows Release builds use WINDOWS subsystem which requires WinMain
-#if defined(_WIN32) && !defined(_DEBUG)
+#if defined(_WIN32) && !defined(_DEBUG) && !defined(__EMSCRIPTEN__)
 #include <windows.h>
 int WINAPI WinMain(HINSTANCE, HINSTANCE, LPSTR, int) {
     return run();
