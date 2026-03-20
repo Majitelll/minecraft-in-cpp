@@ -123,7 +123,7 @@ void App::tick() {
         int lx = wx - cx * CHUNK_SIZE;
         int lz = wz - cz * CHUNK_SIZE;
         Chunk* chunk = chunkManager.getChunk(cx, cz);
-        if (!chunk) return false;
+        if (!chunk) return true;  // treat unloaded chunks as solid to prevent falling through
         return chunk->isSolid(lx, wy, lz);
     });
 

@@ -58,7 +58,7 @@ private:
 
     mutable std::mutex mapMtx;
     std::unordered_map<ChunkPos, ChunkStatus,         ChunkPosHash> chunkStatus;
-    std::unordered_map<ChunkPos, std::unique_ptr<Chunk>, ChunkPosHash> chunkData;
+    std::unordered_map<ChunkPos, std::shared_ptr<Chunk>, ChunkPosHash> chunkData;
 
     // Serialises decoration writes: adjacent decoration workers share neighbor
     // chunks and would data-race on blocks[] without this mutex.

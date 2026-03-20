@@ -32,14 +32,20 @@ static int run() {
         app.run();
         logMsg("app.run() returned normally");
     } catch (const std::exception& e) {
+        std::string msg = std::string("Fatal: ") + e.what() + "\n";
+        std::cerr << msg;
         std::ofstream err("error.log");
-        err << "Fatal: " << e.what() << "\n";
-        logMsg(std::string("Fatal: ") + e.what());
+        if (!err.is_open()) err.open("/tmp/minecraft-error.log");
+        if (err.is_open()) err << msg;
+        logMsg(msg);
         return EXIT_FAILURE;
     } catch (...) {
+        const char* msg = "Fatal: unknown exception\n";
+        std::cerr << msg;
         std::ofstream err("error.log");
-        err << "Fatal: unknown exception\n";
-        logMsg("Fatal: unknown exception");
+        if (!err.is_open()) err.open("/tmp/minecraft-error.log");
+        if (err.is_open()) err << msg;
+        logMsg(msg);
         return EXIT_FAILURE;
     }
     logMsg("clean exit");

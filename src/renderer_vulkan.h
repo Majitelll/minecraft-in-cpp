@@ -79,6 +79,15 @@ private:
     // ── per-chunk GPU buffers ──────────────────────────────────────────────
     std::unordered_map<ChunkPos, ChunkBuffers, ChunkPosHash> chunkBuffers;
 
+    // ── deferred deletion queue ────────────────────────────────────────────
+    // Buffers scheduled for deletion are held here until the frame fence
+    // signals, guaranteeing the GPU is no longer using them.
+    struct PendingDelete {
+        VkBuffer       buffer;
+        VkDeviceMemory memory;
+    };
+    std::vector<PendingDelete> deletionQueue[MAX_FRAMES];
+
     // ── uniform buffers ────────────────────────────────────────────────────
     std::vector<VkBuffer>       ubos;
     std::vector<VkDeviceMemory> uboMems;
@@ -149,6 +158,7 @@ private:
     VkImageView    makeImageView(VkImage img, VkFormat fmt, VkImageAspectFlags aspect);
     VkShaderModule makeShaderModule(const std::vector<char>& code);
 
+    void     flushDeletionQueue(uint32_t frame);
     void     createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
                           VkMemoryPropertyFlags props,
                           VkBuffer& buf, VkDeviceMemory& mem);

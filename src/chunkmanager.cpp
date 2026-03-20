@@ -30,6 +30,8 @@ void ChunkManager::update(int playerChunkX, int playerChunkZ) {
         }
     }
 
+    std::unique_lock<std::mutex> lock(mapMtx);
+
     // Collect and sort new chunks nearest-first so close chunks always load first
     std::vector<ChunkPos> toSchedule;
     for (auto& [pos, _] : desired) {
@@ -41,8 +43,6 @@ void ChunkManager::update(int playerChunkX, int playerChunkZ) {
         int db = (b.x-playerChunkX)*(b.x-playerChunkX) + (b.z-playerChunkZ)*(b.z-playerChunkZ);
         return da < db;
     });
-
-    std::unique_lock<std::mutex> lock(mapMtx);
 
     // ── Schedule terrain for new chunks ──────────────────────────────────────
 #ifdef __EMSCRIPTEN__
@@ -57,7 +57,7 @@ void ChunkManager::update(int playerChunkX, int playerChunkZ) {
         newChunksThisFrame++;
 #endif
         chunkStatus[pos] = ChunkStatus::TerrainPending;
-        chunkData[pos]   = std::make_unique<Chunk>();
+        chunkData[pos]   = std::make_shared<Chunk>();
         lock.unlock();
         scheduleTerrainGen(pos);
         lock.lock();
@@ -171,14 +171,13 @@ bool ChunkManager::allNeighborsAtLeast(ChunkPos pos, ChunkStatus minStatus) {
 void ChunkManager::scheduleTerrainGen(ChunkPos pos) {
     logMsg("scheduleTerrainGen: (" + std::to_string(pos.x) + "," + std::to_string(pos.z) + ")");
     pool.enqueue([this, pos]() {
-        Chunk* myChunk = nullptr;
+        std::shared_ptr<Chunk> myChunk;
         {
             std::unique_lock<std::mutex> lock(mapMtx);
             auto it = chunkData.find(pos);
             if (it == chunkData.end()) return;
-            myChunk = it->second.get();
+            myChunk = it->second;  // extends lifetime beyond lock
         }
-        if (!myChunk) return;
 
         myChunk->generateTerrain(pos.x, pos.z, seed);
 
@@ -196,14 +195,13 @@ void ChunkManager::scheduleTerrainGen(ChunkPos pos) {
 void ChunkManager::scheduleDecoration(ChunkPos pos) {
     logMsg("scheduleDecoration: (" + std::to_string(pos.x) + "," + std::to_string(pos.z) + ")");
     pool.enqueue([this, pos]() {
-        Chunk* myChunk = nullptr;
+        std::shared_ptr<Chunk> myChunk;
         {
             std::unique_lock<std::mutex> lock(mapMtx);
             auto it = chunkData.find(pos);
             if (it == chunkData.end()) return;
-            myChunk = it->second.get();
+            myChunk = it->second;  // extends lifetime beyond lock
         }
-        if (!myChunk) return;
 
         // neighborFn: gets neighbor chunk pointer safely
         auto neighborFn = [this](int cx, int cz) -> Chunk* {
@@ -241,25 +239,24 @@ void ChunkManager::scheduleDecoration(ChunkPos pos) {
 void ChunkManager::scheduleMesh(ChunkPos pos) {
     logMsg("scheduleMesh: (" + std::to_string(pos.x) + "," + std::to_string(pos.z) + ")");
     pool.enqueue([this, pos]() {
-        Chunk* myChunk = nullptr;
+        std::shared_ptr<Chunk> myChunk;
+        // Collect neighbor shared_ptrs to keep them alive during mesh build
+        std::shared_ptr<Chunk> neighborPtrs[3][3];
+        Chunk* neighbors[3][3]{};
         {
             std::unique_lock<std::mutex> lock(mapMtx);
             auto it = chunkData.find(pos);
             if (it == chunkData.end()) return;
-            myChunk = it->second.get();
-        }
-        if (!myChunk) return;
-
-        // Collect neighbor pointers for inter-chunk face culling
-        // Safe to read since all neighbors are DecorationDone (no more writes)
-        Chunk* neighbors[3][3]{};
-        {
-            std::unique_lock<std::mutex> lock(mapMtx);
+            myChunk = it->second;  // extends lifetime beyond lock
+            // Collect neighbor pointers for inter-chunk face culling
+            // Safe to read since all neighbors are DecorationDone (no more writes)
             for (int dx = -1; dx <= 1; dx++) {
                 for (int dz = -1; dz <= 1; dz++) {
-                    auto it = chunkData.find({pos.x+dx, pos.z+dz});
-                    if (it != chunkData.end())
-                        neighbors[dx+1][dz+1] = it->second.get();
+                    auto nit = chunkData.find({pos.x+dx, pos.z+dz});
+                    if (nit != chunkData.end()) {
+                        neighborPtrs[dx+1][dz+1] = nit->second;
+                        neighbors[dx+1][dz+1]    = nit->second.get();
+                    }
                 }
             }
         }

@@ -73,22 +73,13 @@ void processInput(GLFWwindow* window) {
     ePrevious = eNow;
 }
 
-void applyPhysics(float dt, std::function<bool(int,int,int)> isSolid) {
-    // Handle jump request
+void applyPhysics(float dt, const std::function<bool(int,int,int)>& isSolid) {
+    // Handle jump before subdividing — only once per frame
     if (camera.jumpRequested && camera.onGround) {
         camera.velocity[1] = JUMP_SPEED;
         camera.onGround = false;
     }
     camera.jumpRequested = false;
-
-    // Gravity
-    camera.velocity[1] += GRAVITY * dt;
-    if (camera.velocity[1] < MAX_FALL) camera.velocity[1] = MAX_FALL;
-
-    // Work in feet-space (eye is EYE_HEIGHT above feet)
-    float fx = camera.position[0];
-    float fy = camera.position[1] - EYE_HEIGHT;
-    float fz = camera.position[2];
 
     // Returns true if the player AABB at (px, py, pz) overlaps any solid block
     auto aabbSolid = [&](float px, float py, float pz) -> bool {
@@ -106,33 +97,53 @@ void applyPhysics(float dt, std::function<bool(int,int,int)> isSolid) {
         return false;
     };
 
-    // Resolve X
-    float nx = fx + camera.velocity[0] * dt;
-    if (aabbSolid(nx, fy, fz)) {
-        camera.velocity[0] = 0.f;
-    } else {
-        fx = nx;
-    }
+    // Fixed-timestep subdivision prevents tunneling at low FPS.
+    // Each sub-step is at most FIXED_STEP seconds; the last step uses the remainder.
+    static constexpr float FIXED_STEP = 1.0f / 120.0f;
+    static constexpr int   MAX_STEPS  = 10;  // cap to prevent spiral-of-death
 
-    // Resolve Y
-    float ny = fy + camera.velocity[1] * dt;
-    if (aabbSolid(fx, ny, fz)) {
-        if (camera.velocity[1] < 0.f)
-            camera.onGround = true;
-        camera.velocity[1] = 0.f;
-        // fy stays at old value (no penetration)
-    } else {
-        fy = ny;
-        if (camera.velocity[1] < 0.f)
-            camera.onGround = false;  // falling freely
-    }
+    // Work in feet-space (eye is EYE_HEIGHT above feet)
+    float fx = camera.position[0];
+    float fy = camera.position[1] - EYE_HEIGHT;
+    float fz = camera.position[2];
 
-    // Resolve Z
-    float nz = fz + camera.velocity[2] * dt;
-    if (aabbSolid(fx, fy, nz)) {
-        camera.velocity[2] = 0.f;
-    } else {
-        fz = nz;
+    float remaining = dt;
+    for (int step = 0; step < MAX_STEPS && remaining > 0.f; ++step) {
+        float s = (remaining > FIXED_STEP) ? FIXED_STEP : remaining;
+        remaining -= s;
+
+        // Gravity
+        camera.velocity[1] += GRAVITY * s;
+        if (camera.velocity[1] < MAX_FALL) camera.velocity[1] = MAX_FALL;
+
+        // Resolve X
+        float nx = fx + camera.velocity[0] * s;
+        if (aabbSolid(nx, fy, fz)) {
+            camera.velocity[0] = 0.f;
+        } else {
+            fx = nx;
+        }
+
+        // Resolve Y
+        float ny = fy + camera.velocity[1] * s;
+        if (aabbSolid(fx, ny, fz)) {
+            if (camera.velocity[1] < 0.f)
+                camera.onGround = true;
+            camera.velocity[1] = 0.f;
+            // fy stays at old value (no penetration)
+        } else {
+            fy = ny;
+            if (camera.velocity[1] < 0.f)
+                camera.onGround = false;  // falling freely
+        }
+
+        // Resolve Z
+        float nz = fz + camera.velocity[2] * s;
+        if (aabbSolid(fx, fy, nz)) {
+            camera.velocity[2] = 0.f;
+        } else {
+            fz = nz;
+        }
     }
 
     // Write back eye position
