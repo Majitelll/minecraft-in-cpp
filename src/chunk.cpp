@@ -81,6 +81,9 @@ static int getHeight(int wx, int wz, unsigned int seed) {
                         h = 12.f + ridge * 40.f;
                     }
                     break;
+                default:
+                    h = 8.f + n * 16.f;
+                    break;
             }
             totalHeight += h * weight;
             totalWeight += weight;

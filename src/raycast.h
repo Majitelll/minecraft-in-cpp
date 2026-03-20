@@ -41,8 +41,6 @@ inline RayHit castRay(const vec3 origin, const vec3 dir, float maxDist,
     int lastNX=0, lastNY=0, lastNZ=0;
 
     // We always advance at least once so we never hit the block the camera is inside
-    bool first = true;
-
     for (;;) {
         // Advance to next voxel boundary
         if (tmx < tmy && tmx < tmz) {

@@ -26,4 +26,4 @@ extern bool   ePrevious;
 
 void mouseCallback(GLFWwindow* window, double xpos, double ypos);
 void processInput(GLFWwindow* window);
-void applyPhysics(float dt, std::function<bool(int,int,int)> isSolid);
+void applyPhysics(float dt, const std::function<bool(int,int,int)>& isSolid);

@@ -6,6 +6,7 @@
 #include <array>
 #include <cmath>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -40,9 +41,24 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debugCallback(
     return VK_FALSE;
 }
 
+// Returns the directory containing the running executable.
+// Shader files are resolved relative to this directory so the game works
+// regardless of the process's working directory.
+static std::string getExeDir() {
+#ifdef _WIN32
+    wchar_t buf[MAX_PATH];
+    GetModuleFileNameW(nullptr, buf, MAX_PATH);
+    return std::filesystem::path(buf).parent_path().string();
+#else
+    return std::filesystem::read_symlink("/proc/self/exe").parent_path().string();
+#endif
+}
+
 static std::vector<char> readFile(const std::string& path) {
-    std::ifstream f(path, std::ios::ate | std::ios::binary);
-    if (!f.is_open()) throw std::runtime_error("Cannot open: " + path);
+    static const std::string exeDir = getExeDir();
+    std::string fullPath = exeDir + "/" + path;
+    std::ifstream f(fullPath, std::ios::ate | std::ios::binary);
+    if (!f.is_open()) throw std::runtime_error("Cannot open: " + fullPath);
     size_t sz = (size_t)f.tellg();
     std::vector<char> buf(sz);
     f.seekg(0); f.read(buf.data(), sz);
@@ -102,6 +118,7 @@ bool VulkanRenderer::drawFrame(const Camera& camera, bool wireframe) {
 
     if (log0) logMsg("  drawFrame: waitForFences");
     vkWaitForFences(device, 1, &inFlight[currentFrame], VK_TRUE, UINT64_MAX);
+    flushDeletionQueue(currentFrame);
 
     if (log0) logMsg("  drawFrame: acquireNextImage");
     uint32_t imgIdx;
@@ -194,9 +211,8 @@ void VulkanRenderer::destroyChunkBuffers(ChunkPos pos) {
     auto it = chunkBuffers.find(pos);
     if (it == chunkBuffers.end()) return;
     logMsg("destroyChunkBuffers: (" + std::to_string(pos.x) + "," + std::to_string(pos.z) + ")");
-    vkDeviceWaitIdle(device);
-    vkDestroyBuffer(device, it->second.vertexBuffer, nullptr);
-    vkFreeMemory(device, it->second.vertexMemory, nullptr);
+    // Defer destruction until the current frame's fence is signaled
+    deletionQueue[currentFrame].push_back({it->second.vertexBuffer, it->second.vertexMemory});
     chunkBuffers.erase(it);
 }
 
@@ -205,9 +221,8 @@ void VulkanRenderer::destroyChunkBuffers(ChunkPos pos) {
 // ─────────────────────────────────────────────────────────────────────────────
 void VulkanRenderer::uploadUIVertices(const std::vector<float>& verts) {
     if (uiVertexBuf != VK_NULL_HANDLE) {
-        vkDeviceWaitIdle(device);
-        vkDestroyBuffer(device, uiVertexBuf, nullptr);
-        vkFreeMemory(device, uiVertexMem, nullptr);
+        // Defer destruction until the GPU is done with this frame
+        deletionQueue[currentFrame].push_back({uiVertexBuf, uiVertexMem});
         uiVertexBuf = VK_NULL_HANDLE;
     }
 
@@ -814,6 +829,17 @@ void VulkanRenderer::createCommandPool() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Deferred deletion queue
+// ─────────────────────────────────────────────────────────────────────────────
+void VulkanRenderer::flushDeletionQueue(uint32_t frame) {
+    for (auto& pd : deletionQueue[frame]) {
+        vkDestroyBuffer(device, pd.buffer, nullptr);
+        vkFreeMemory(device, pd.memory, nullptr);
+    }
+    deletionQueue[frame].clear();
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // Buffer helpers
 // ─────────────────────────────────────────────────────────────────────────────
 void VulkanRenderer::createBuffer(VkDeviceSize size, VkBufferUsageFlags usage,
@@ -838,10 +864,14 @@ void VulkanRenderer::copyBuffer(VkBuffer src, VkBuffer dst, VkDeviceSize size) {
     vkBeginCommandBuffer(cb, &bi);
     VkBufferCopy region{0,0,size}; vkCmdCopyBuffer(cb, src, dst, 1, &region);
     vkEndCommandBuffer(cb);
+    VkFenceCreateInfo fci{VK_STRUCTURE_TYPE_FENCE_CREATE_INFO};
+    VkFence copyFence;
+    vkCreateFence(device, &fci, nullptr, &copyFence);
     VkSubmitInfo si{VK_STRUCTURE_TYPE_SUBMIT_INFO};
     si.commandBufferCount = 1; si.pCommandBuffers = &cb;
-    vkQueueSubmit(graphicsQueue, 1, &si, VK_NULL_HANDLE);
-    vkQueueWaitIdle(graphicsQueue);
+    vkQueueSubmit(graphicsQueue, 1, &si, copyFence);
+    vkWaitForFences(device, 1, &copyFence, VK_TRUE, UINT64_MAX);
+    vkDestroyFence(device, copyFence, nullptr);
     vkFreeCommandBuffers(device, cmdPool, 1, &cb);
 }
 
@@ -1104,6 +1134,7 @@ void VulkanRenderer::recreateSwapchain() {
 // ─────────────────────────────────────────────────────────────────────────────
 void VulkanRenderer::cleanup() {
     cleanupSwapchain();
+    for (int i = 0; i < MAX_FRAMES; i++) flushDeletionQueue(i);
     for (auto& [pos, buf] : chunkBuffers) {
         vkDestroyBuffer(device, buf.vertexBuffer, nullptr);
         vkFreeMemory(device, buf.vertexMemory, nullptr);
